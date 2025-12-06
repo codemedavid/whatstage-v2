@@ -356,26 +356,48 @@ Respond with ONLY "true" or "false" based on whether the condition is met.`;
 }
 
 export async function triggerWorkflowsForStage(stageId: string, leadId: string): Promise<void> {
-    const { data: workflows } = await supabase
+    console.log(`Checking workflows for stage ${stageId} and lead ${leadId}`);
+
+    const { data: workflows, error: workflowError } = await supabase
         .from('workflows')
         .select('*')
         .eq('trigger_stage_id', stageId)
         .eq('is_published', true);
+
+    if (workflowError) {
+        console.error('Error fetching workflows:', workflowError);
+        return;
+    }
 
     if (!workflows || workflows.length === 0) {
         console.log('No workflows triggered for stage:', stageId);
         return;
     }
 
-    const { data: lead } = await supabase
+    console.log(`Found ${workflows.length} workflows to trigger:`, workflows.map(w => w.name));
+
+    const { data: lead, error: leadError } = await supabase
         .from('leads')
         .select('sender_id')
         .eq('id', leadId)
         .single();
 
-    if (!lead) return;
+    if (leadError) {
+        console.error('Error fetching lead:', leadError);
+        return;
+    }
+
+    if (!lead?.sender_id) {
+        console.error('Lead not found or no sender_id:', leadId);
+        return;
+    }
+
+    console.log('Lead sender_id:', lead.sender_id);
 
     for (const workflow of workflows) {
-        await executeWorkflow(workflow.id, leadId, lead.sender_id);
+        console.log(`Executing workflow: ${workflow.name} (${workflow.id})`);
+        // Skip publish check since we already filtered for published workflows
+        await executeWorkflow(workflow.id, leadId, lead.sender_id, true);
     }
 }
+

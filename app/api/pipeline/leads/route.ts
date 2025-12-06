@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/app/lib/supabase';
+import { waitUntil } from '@vercel/functions';
 
 // GET - Fetch all leads with their stages
 export async function GET() {
@@ -87,10 +88,13 @@ export async function PATCH(req: Request) {
         if (stageChanged && lead?.sender_id) {
             console.log(`Lead ${leadId} moved to stage ${stageId}, triggering workflows...`);
             const { triggerWorkflowsForStage } = await import('@/app/lib/workflowEngine');
-            // Don't await - fire and forget to not block the response
-            triggerWorkflowsForStage(stageId, leadId).catch(err => {
-                console.error('Error triggering workflows:', err);
-            });
+
+            // Use waitUntil to keep the serverless function alive while workflow executes
+            waitUntil(
+                triggerWorkflowsForStage(stageId, leadId).catch(err => {
+                    console.error('Error triggering workflows:', err);
+                })
+            );
         }
 
         return NextResponse.json({ lead: data });
