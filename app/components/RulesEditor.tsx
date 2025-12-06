@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Save, Bot, Plus, Trash2, GripVertical, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Save, Bot, Plus, Trash2, GripVertical, ToggleLeft, ToggleRight, Clock } from 'lucide-react';
 
 interface Rule {
     id: string;
@@ -14,6 +14,7 @@ interface Rule {
 export default function RulesEditor() {
     const [botName, setBotName] = useState('');
     const [botTone, setBotTone] = useState('');
+    const [humanTakeoverTimeout, setHumanTakeoverTimeout] = useState(5);
     const [instructions, setInstructions] = useState('');
     const [rules, setRules] = useState<Rule[]>([]);
     const [newRule, setNewRule] = useState('');
@@ -32,6 +33,9 @@ export default function RulesEditor() {
             const data = await res.json();
             if (data.botName) setBotName(data.botName);
             if (data.botTone) setBotTone(data.botTone);
+            if (data.humanTakeoverTimeoutMinutes !== undefined) {
+                setHumanTakeoverTimeout(data.humanTakeoverTimeoutMinutes);
+            }
         } catch (error) {
             console.error('Failed to fetch settings:', error);
         }
@@ -64,7 +68,7 @@ export default function RulesEditor() {
                 fetch('/api/settings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ botName, botTone }),
+                    body: JSON.stringify({ botName, botTone, humanTakeoverTimeoutMinutes: humanTakeoverTimeout }),
                 }),
                 fetch('/api/instructions', {
                     method: 'POST',
@@ -167,6 +171,28 @@ export default function RulesEditor() {
                                     className="w-full p-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-800"
                                 />
                             </div>
+                        </div>
+                    </div>
+
+                    {/* Human Takeover Settings */}
+                    <div className="bg-white shadow-sm border border-gray-200 rounded-lg p-6">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Clock className="text-orange-500" size={18} />
+                            <h3 className="font-semibold text-gray-800">Human Takeover</h3>
+                        </div>
+                        <p className="text-sm text-gray-500 mb-4">
+                            When you manually reply to a customer, the AI will pause for this duration before resuming.
+                        </p>
+                        <div className="flex items-center gap-3">
+                            <input
+                                type="number"
+                                min="1"
+                                max="60"
+                                value={humanTakeoverTimeout}
+                                onChange={(e) => setHumanTakeoverTimeout(Math.max(1, Math.min(60, parseInt(e.target.value) || 5)))}
+                                className="w-20 p-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-800 text-center"
+                            />
+                            <span className="text-sm text-gray-600">minutes before AI resumes</span>
                         </div>
                     </div>
 

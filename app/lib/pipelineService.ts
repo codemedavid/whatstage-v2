@@ -462,6 +462,11 @@ export async function moveLeadToReceiptStage(leadId: string, receiptImageUrl: st
             return false;
         }
 
+        if (!paymentStage) {
+            console.error('Payment stage not available');
+            return false;
+        }
+
         // Only update if not already in Payment Sent stage
         if (lead.current_stage_id === paymentStage.id) {
             console.log('Lead already in Payment Sent stage');

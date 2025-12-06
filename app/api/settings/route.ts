@@ -27,6 +27,7 @@ export async function GET() {
             botTone: data.bot_tone || 'helpful and professional',
             facebookVerifyToken: data.facebook_verify_token || 'TEST_TOKEN',
             facebookPageAccessToken: data.facebook_page_access_token || '',
+            humanTakeoverTimeoutMinutes: data.human_takeover_timeout_minutes ?? 5,
         });
     } catch (error) {
         console.error('Error:', error);
@@ -48,6 +49,7 @@ export async function POST(req: Request) {
         if (body.botTone !== undefined) updates.bot_tone = body.botTone;
         if (body.facebookVerifyToken !== undefined) updates.facebook_verify_token = body.facebookVerifyToken;
         if (body.facebookPageAccessToken !== undefined) updates.facebook_page_access_token = body.facebookPageAccessToken;
+        if (body.humanTakeoverTimeoutMinutes !== undefined) updates.human_takeover_timeout_minutes = body.humanTakeoverTimeoutMinutes;
 
         // Check if settings row exists
         const { data: existing } = await supabase
@@ -76,6 +78,7 @@ export async function POST(req: Request) {
                     bot_tone: body.botTone || 'helpful and professional',
                     facebook_verify_token: body.facebookVerifyToken || 'TEST_TOKEN',
                     facebook_page_access_token: body.facebookPageAccessToken || null,
+                    human_takeover_timeout_minutes: body.humanTakeoverTimeoutMinutes ?? 5,
                 });
 
             if (error) {
@@ -90,6 +93,7 @@ export async function POST(req: Request) {
             botTone: body.botTone,
             facebookVerifyToken: body.facebookVerifyToken,
             facebookPageAccessToken: body.facebookPageAccessToken,
+            humanTakeoverTimeoutMinutes: body.humanTakeoverTimeoutMinutes,
         });
     } catch (error) {
         console.error('Error:', error);

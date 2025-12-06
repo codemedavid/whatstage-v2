@@ -168,57 +168,59 @@ export default function PipelineBoard() {
             </div>
 
             {/* Board Area */}
-            <div className="flex-1 overflow-x-auto overflow-y-hidden">
-                <div className="h-full flex p-6 gap-4 min-w-max">
-                    {stages.map((stage) => (
-                        <StageColumn
-                            key={stage.id}
-                            stage={stage}
-                            onMoveLead={handleMoveLead}
-                            allStages={stages}
-                        />
-                    ))}
+            <DragDropContext onDragEnd={onDragEnd}>
+                <div className="flex-1 overflow-x-auto overflow-y-hidden">
+                    <div className="h-full flex p-6 gap-4 min-w-max">
+                        {stages.map((stage) => (
+                            <StageColumn
+                                key={stage.id}
+                                stage={stage}
+                                onMoveLead={handleMoveLead}
+                                allStages={stages}
+                            />
+                        ))}
 
-                    {/* Add Stage Button/Form */}
-                    <div className="min-w-[320px] h-full">
-                        {isAddingStage ? (
-                            <form onSubmit={handleAddStage} className="bg-gray-50 p-4 rounded-xl border-2 border-dashed border-gray-200">
-                                <input
-                                    autoFocus
-                                    type="text"
-                                    placeholder="Stage Name"
-                                    className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm font-medium mb-3 focus:outline-none focus:ring-2 focus:ring-black/5"
-                                    value={newStageName}
-                                    onChange={(e) => setNewStageName(e.target.value)}
-                                />
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        type="submit"
-                                        className="px-3 py-1.5 bg-black text-white text-xs font-bold rounded-md hover:bg-gray-800 transition-colors"
-                                    >
-                                        Add Stage
-                                    </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => setIsAddingStage(false)}
-                                        className="px-3 py-1.5 text-gray-500 text-xs font-bold hover:text-gray-900 transition-colors"
-                                    >
-                                        Cancel
-                                    </button>
-                                </div>
-                            </form>
-                        ) : (
-                            <button
-                                onClick={() => setIsAddingStage(true)}
-                                className="w-full h-[60px] flex items-center justify-center gap-2 border-2 border-dashed border-gray-100 hover:border-gray-300 rounded-xl text-gray-400 hover:text-gray-600 transition-all font-medium"
-                            >
-                                <Plus size={20} />
-                                Add Stage
-                            </button>
-                        )}
+                        {/* Add Stage Button/Form */}
+                        <div className="min-w-[320px] h-full">
+                            {isAddingStage ? (
+                                <form onSubmit={handleAddStage} className="bg-gray-50 p-4 rounded-xl border-2 border-dashed border-gray-200">
+                                    <input
+                                        autoFocus
+                                        type="text"
+                                        placeholder="Stage Name"
+                                        className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm font-medium mb-3 focus:outline-none focus:ring-2 focus:ring-black/5"
+                                        value={newStageName}
+                                        onChange={(e) => setNewStageName(e.target.value)}
+                                    />
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="submit"
+                                            className="px-3 py-1.5 bg-black text-white text-xs font-bold rounded-md hover:bg-gray-800 transition-colors"
+                                        >
+                                            Add Stage
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsAddingStage(false)}
+                                            className="px-3 py-1.5 text-gray-500 text-xs font-bold hover:text-gray-900 transition-colors"
+                                        >
+                                            Cancel
+                                        </button>
+                                    </div>
+                                </form>
+                            ) : (
+                                <button
+                                    onClick={() => setIsAddingStage(true)}
+                                    className="w-full h-[60px] flex items-center justify-center gap-2 border-2 border-dashed border-gray-100 hover:border-gray-300 rounded-xl text-gray-400 hover:text-gray-600 transition-all font-medium"
+                                >
+                                    <Plus size={20} />
+                                    Add Stage
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
-            </div>
+            </DragDropContext>
         </div>
     );
 }
