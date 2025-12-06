@@ -2,19 +2,26 @@
 
 import {
     LayoutGrid,
-    FileText,
     Settings,
-    Users,
     HelpCircle,
     LogOut,
-    Database,
-    Bot,
-    Kanban
+    Kanban,
+    Workflow
 } from 'lucide-react';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 export default function Sidebar() {
+    const pathname = usePathname();
+
+    const navItems = [
+        { icon: LayoutGrid, href: '/', label: 'Dashboard' },
+        { icon: Kanban, href: '/pipeline', label: 'Pipeline' },
+        { icon: Workflow, href: '/automation', label: 'Automation' },
+        { icon: Settings, href: '/settings', label: 'Settings' },
+    ];
+
     return (
         <div className="w-16 bg-[#1C1C1C] h-screen flex flex-col items-center py-6 text-gray-400 border-r border-gray-800 flex-shrink-0">
             <div className="mb-8">
@@ -25,31 +32,26 @@ export default function Sidebar() {
                 </Link>
             </div>
 
-            <nav className="flex-1 flex flex-col gap-6 w-full items-center">
-                <Link href="/" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <LayoutGrid size={20} />
-                </Link>
-                <Link href="/pipeline" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Kanban size={20} />
-                </Link>
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Database size={20} />
-                </button>
-                <Link href="/settings" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Settings size={20} />
-                </Link>
-                <button className="p-2 text-teal-400 bg-teal-400/10 rounded-lg transition-colors">
-                    <FileText size={20} />
-                </button>
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Users size={20} />
-                </button>
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Bot size={20} />
-                </button>
+            <nav className="flex-1 flex flex-col gap-4 w-full items-center">
+                {navItems.map((item) => {
+                    const isActive = pathname === item.href;
+                    return (
+                        <Link
+                            key={item.href}
+                            href={item.href}
+                            className={`p-2 rounded-lg transition-colors ${isActive
+                                    ? 'text-white bg-white/10'
+                                    : 'hover:text-white hover:bg-white/10'
+                                }`}
+                            title={item.label}
+                        >
+                            <item.icon size={20} />
+                        </Link>
+                    );
+                })}
             </nav>
 
-            <div className="flex flex-col gap-6 w-full items-center mt-auto">
+            <div className="flex flex-col gap-4 w-full items-center mt-auto">
                 <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
                     <HelpCircle size={20} />
                 </button>

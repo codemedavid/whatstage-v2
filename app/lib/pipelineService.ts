@@ -290,6 +290,14 @@ Choose the most appropriate stage based on the customer's intent, interest level
                 .eq('id', lead.id);
 
             console.log(`Lead ${lead.id} moved to stage: ${matchedStage.name}`);
+
+            // Trigger workflows for this stage change
+            try {
+                const { triggerWorkflowsForStage } = await import('./workflowEngine');
+                await triggerWorkflowsForStage(matchedStage.id, lead.id);
+            } catch (workflowError) {
+                console.error('Error triggering workflows:', workflowError);
+            }
         } else {
             // Just update last analyzed timestamp
             await supabase
