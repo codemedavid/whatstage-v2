@@ -38,29 +38,59 @@ export async function getOrCreateLead(senderId: string, pageAccessToken?: string
             .eq('sender_id', senderId)
             .single();
 
+        // Helper function to fetch Facebook profile
+        const fetchFacebookProfile = async (): Promise<{ name: string | null; profilePic: string | null }> => {
+            if (!pageAccessToken) {
+                console.log('No page access token provided, skipping profile fetch');
+                return { name: null, profilePic: null };
+            }
+
+            try {
+                const url = `https://graph.facebook.com/v21.0/${senderId}?fields=first_name,last_name,name,profile_pic&access_token=${pageAccessToken}`;
+                console.log('Fetching Facebook profile:', senderId);
+
+                const profileRes = await fetch(url);
+                const responseText = await profileRes.text();
+
+                if (!profileRes.ok) {
+                    console.error('Facebook profile API error:', profileRes.status, responseText);
+                    return { name: null, profilePic: null };
+                }
+
+                const profile = JSON.parse(responseText);
+                console.log('Facebook profile response:', JSON.stringify(profile));
+
+                const name = profile.name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || null;
+                const profilePic = profile.profile_pic || null;
+
+                console.log('Fetched Facebook profile for lead:', name);
+                return { name, profilePic };
+            } catch (profileError) {
+                console.error('Error fetching Facebook profile:', profileError);
+                return { name: null, profilePic: null };
+            }
+        };
+
         if (existing) {
+            // If lead exists but has no name, try to fetch it
+            if (!existing.name && pageAccessToken) {
+                console.log('Existing lead has no name, attempting to fetch profile');
+                const { name, profilePic } = await fetchFacebookProfile();
+
+                if (name) {
+                    await supabase
+                        .from('leads')
+                        .update({ name, profile_pic: profilePic })
+                        .eq('id', existing.id);
+
+                    return { ...existing, name, profile_pic: profilePic } as Lead;
+                }
+            }
             return existing as Lead;
         }
 
-        // Fetch user profile from Facebook if we have a token
-        let userName: string | null = null;
-        let profilePic: string | null = null;
-
-        if (pageAccessToken) {
-            try {
-                const profileRes = await fetch(
-                    `https://graph.facebook.com/v21.0/${senderId}?fields=first_name,last_name,name,profile_pic&access_token=${pageAccessToken}`
-                );
-                if (profileRes.ok) {
-                    const profile = await profileRes.json();
-                    userName = profile.name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || null;
-                    profilePic = profile.profile_pic || null;
-                    console.log('Fetched Facebook profile for lead:', userName);
-                }
-            } catch (profileError) {
-                console.error('Error fetching Facebook profile:', profileError);
-            }
-        }
+        // Fetch user profile from Facebook for new lead
+        const { name: userName, profilePic } = await fetchFacebookProfile();
 
         // Get the default "New Lead" stage
         const { data: defaultStage } = await supabase
@@ -93,6 +123,7 @@ export async function getOrCreateLead(senderId: string, pageAccessToken?: string
         console.error('Error in getOrCreateLead:', error);
         return null;
     }
+
 }
 
 
