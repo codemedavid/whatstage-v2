@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import { getBotResponse } from '@/app/lib/chatService';
 import { supabase } from '@/app/lib/supabase';
 
@@ -104,10 +105,13 @@ export async function POST(req: Request) {
 
                 if (webhook_event.message && webhook_event.message.text) {
                     console.log('Message text:', webhook_event.message.text);
-                    // Process message in background (don't await)
-                    handleMessage(sender_psid, webhook_event.message.text).catch(err => {
-                        console.error('Error handling message:', err);
-                    });
+                    // Use waitUntil to ensure Vercel keeps the function alive
+                    // until the message is fully processed and responded to
+                    waitUntil(
+                        handleMessage(sender_psid, webhook_event.message.text).catch(err => {
+                            console.error('Error handling message:', err);
+                        })
+                    );
                 }
             }
             return new NextResponse('EVENT_RECEIVED', { status: 200 });

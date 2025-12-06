@@ -8,7 +8,8 @@ import {
     HelpCircle,
     LogOut,
     Database,
-    Bot
+    Bot,
+    Kanban
 } from 'lucide-react';
 
 import Link from 'next/link';
@@ -25,33 +26,19 @@ export default function Sidebar() {
             </div>
 
             <nav className="flex-1 flex flex-col gap-6 w-full items-center">
-                <Link href="/" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+                <Link href="/" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="Dashboard">
                     <LayoutGrid size={20} />
                 </Link>
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Database size={20} />
-                </button>
-                <Link href="/settings" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+                <Link href="/pipeline" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="Pipeline">
+                    <Kanban size={20} />
+                </Link>
+                <Link href="/settings" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="Settings">
                     <Settings size={20} />
                 </Link>
-                <button className="p-2 text-teal-400 bg-teal-400/10 rounded-lg transition-colors">
-                    <FileText size={20} />
-                </button>
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Users size={20} />
-                </button>
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <Bot size={20} />
-                </button>
             </nav>
 
             <div className="flex flex-col gap-6 w-full items-center mt-auto">
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <HelpCircle size={20} />
-                </button>
-                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
-                    <LogOut size={20} />
-                </button>
+                {/* Bottom icons removed as per request */}
             </div>
         </div>
     );
