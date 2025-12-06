@@ -26,8 +26,15 @@ function AutomationPageContent() {
         fetch('/api/pipeline/leads')
             .then(res => res.json())
             .then(data => {
-                if (data.leads && Array.isArray(data.leads)) {
-                    setTestLeads(data.leads);
+                // API returns { stages: [...] } where each stage has leads array
+                if (data.stages && Array.isArray(data.stages)) {
+                    const allLeads: Array<{ id: string; sender_id: string; name: string | null }> = [];
+                    data.stages.forEach((stage: { leads: Array<{ id: string; sender_id: string; name: string | null }> }) => {
+                        if (stage.leads) {
+                            allLeads.push(...stage.leads);
+                        }
+                    });
+                    setTestLeads(allLeads);
                 }
             })
             .catch(err => console.error('Error fetching leads:', err));
