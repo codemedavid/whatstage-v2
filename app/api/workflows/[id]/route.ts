@@ -3,13 +3,14 @@ import { supabase } from '@/app/lib/supabase';
 
 export async function GET(
     req: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        const { id } = await params;
         const { data, error } = await supabase
             .from('workflows')
             .select('*')
-            .eq('id', params.id)
+            .eq('id', id)
             .single();
 
         if (error) throw error;
@@ -23,13 +24,14 @@ export async function GET(
 
 export async function DELETE(
     req: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        const { id } = await params;
         const { error } = await supabase
             .from('workflows')
             .delete()
-            .eq('id', params.id);
+            .eq('id', id);
 
         if (error) throw error;
 
