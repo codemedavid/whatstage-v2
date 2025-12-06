@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { waitUntil } from '@vercel/functions';
 import { getBotResponse } from '@/app/lib/chatService';
 import { supabase } from '@/app/lib/supabase';
+import { getOrCreateLead, incrementMessageCount, shouldAnalyzeStage, analyzeAndUpdateStage } from '@/app/lib/pipelineService';
 
 // Cache settings to avoid database calls on every request
 let cachedSettings: any = null;
@@ -155,6 +156,24 @@ async function handleMessage(sender_psid: string, received_message: string) {
 
     // Process message and send response
     try {
+        // === AUTO-PIPELINE INTEGRATION ===
+        // Track the lead and check if stage analysis is needed
+        const lead = await getOrCreateLead(sender_psid);
+        if (lead) {
+            const messageCount = await incrementMessageCount(lead.id);
+            console.log(`Lead ${lead.id} message count: ${messageCount}`);
+
+            // Check if we should analyze stage (runs in background, non-blocking)
+            if (shouldAnalyzeStage({ ...lead, message_count: messageCount }, received_message)) {
+                console.log('Triggering pipeline stage analysis...');
+                // Fire and forget - don't await
+                analyzeAndUpdateStage(lead, sender_psid).catch((err: unknown) => {
+                    console.error('Error in stage analysis:', err);
+                });
+            }
+        }
+        // === END AUTO-PIPELINE ===
+
         const responseText = await getBotResponse(received_message, sender_psid);
         console.log('Bot response generated:', responseText.substring(0, 100) + '...');
 
@@ -168,6 +187,7 @@ async function handleMessage(sender_psid: string, received_message: string) {
         await sendTypingIndicator(sender_psid, false);
     }
 }
+
 
 
 

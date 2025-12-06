@@ -26,19 +26,36 @@ export default function Sidebar() {
             </div>
 
             <nav className="flex-1 flex flex-col gap-6 w-full items-center">
-                <Link href="/" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="Dashboard">
+                <Link href="/" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
                     <LayoutGrid size={20} />
                 </Link>
-                <Link href="/pipeline" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="Pipeline">
+                <Link href="/pipeline" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
                     <Kanban size={20} />
                 </Link>
-                <Link href="/settings" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors" title="Settings">
+                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+                    <Database size={20} />
+                </button>
+                <Link href="/settings" className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
                     <Settings size={20} />
                 </Link>
+                <button className="p-2 text-teal-400 bg-teal-400/10 rounded-lg transition-colors">
+                    <FileText size={20} />
+                </button>
+                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+                    <Users size={20} />
+                </button>
+                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+                    <Bot size={20} />
+                </button>
             </nav>
 
             <div className="flex flex-col gap-6 w-full items-center mt-auto">
-                {/* Bottom icons removed as per request */}
+                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+                    <HelpCircle size={20} />
+                </button>
+                <button className="p-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors">
+                    <LogOut size={20} />
+                </button>
             </div>
         </div>
     );

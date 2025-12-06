@@ -5,7 +5,7 @@ import { supabase } from '@/app/lib/supabase';
 export async function GET() {
     const { data, error } = await supabase
         .from('documents')
-        .select('id, content, metadata')
+        .select('id, content, metadata, folder_id')
         .order('id', { ascending: false })
         .limit(50);
 
@@ -17,6 +17,7 @@ export async function GET() {
         id: item.id,
         text: item.content,
         createdAt: new Date().toISOString(),
+        folderId: item.folder_id || undefined,
     }));
 
     return NextResponse.json(mappedData);
@@ -39,6 +40,32 @@ export async function POST(req: Request) {
 
         return NextResponse.json({ success: true }, { status: 201 });
     } catch (error) {
+        return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    }
+}
+
+// PATCH - Update document's folder assignment
+export async function PATCH(req: Request) {
+    try {
+        const { id, folderId } = await req.json();
+
+        if (!id) {
+            return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
+        }
+
+        const { error } = await supabase
+            .from('documents')
+            .update({ folder_id: folderId || null })
+            .eq('id', id);
+
+        if (error) {
+            console.error('Error updating document folder:', error);
+            return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+
+        return NextResponse.json({ success: true });
+    } catch (error) {
+        console.error('Error:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }

@@ -22,10 +22,7 @@ interface KnowledgeBaseProps {
 
 export default function KnowledgeBase({ onSelect }: KnowledgeBaseProps) {
   const [knowledge, setKnowledge] = useState<KnowledgeItem[]>([]);
-  const [folders, setFolders] = useState<FolderItem[]>([
-    { id: 'sales', name: 'Sales Scripts', isOpen: true },
-    { id: 'objections', name: 'Objection Handling', isOpen: false },
-  ]);
+  const [folders, setFolders] = useState<FolderItem[]>([]);
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; docId: string } | null>(null);
@@ -36,6 +33,7 @@ export default function KnowledgeBase({ onSelect }: KnowledgeBaseProps) {
 
   useEffect(() => {
     fetchKnowledge();
+    fetchFolders();
   }, []);
 
   useEffect(() => {
@@ -59,14 +57,33 @@ export default function KnowledgeBase({ onSelect }: KnowledgeBaseProps) {
     }
   };
 
-  const handleCreateFolder = () => {
+  const fetchFolders = async () => {
+    try {
+      const res = await fetch('/api/folders');
+      const data = await res.json();
+      if (Array.isArray(data)) {
+        setFolders(data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch folders:', error);
+    }
+  };
+
+  const handleCreateFolder = async () => {
     if (!newFolderName.trim()) return;
-    const newFolder: FolderItem = {
-      id: Date.now().toString(),
-      name: newFolderName,
-      isOpen: true,
-    };
-    setFolders([...folders, newFolder]);
+    try {
+      const res = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newFolderName }),
+      });
+      const newFolder = await res.json();
+      if (res.ok) {
+        setFolders([...folders, newFolder]);
+      }
+    } catch (error) {
+      console.error('Failed to create folder:', error);
+    }
     setNewFolderName('');
     setShowNewFolder(false);
   };
@@ -82,10 +99,19 @@ export default function KnowledgeBase({ onSelect }: KnowledgeBaseProps) {
     setContextMenu({ x: e.clientX, y: e.clientY, docId });
   };
 
-  const moveToFolder = (docId: string, folderId: string | null) => {
-    setKnowledge(knowledge.map(k =>
-      k.id === docId ? { ...k, folderId: folderId || undefined } : k
-    ));
+  const moveToFolder = async (docId: string, folderId: string | null) => {
+    try {
+      await fetch('/api/knowledge', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: docId, folderId }),
+      });
+      setKnowledge(knowledge.map(k =>
+        k.id === docId ? { ...k, folderId: folderId || undefined } : k
+      ));
+    } catch (error) {
+      console.error('Failed to move document:', error);
+    }
     setContextMenu(null);
     setShowMoveMenu(null);
   };
@@ -108,10 +134,24 @@ export default function KnowledgeBase({ onSelect }: KnowledgeBaseProps) {
     }
   };
 
-  const bulkMoveToFolder = (folderId: string | null) => {
-    setKnowledge(knowledge.map(k =>
-      selectedDocs.has(k.id) ? { ...k, folderId: folderId || undefined } : k
-    ));
+  const bulkMoveToFolder = async (folderId: string | null) => {
+    try {
+      // Update all selected documents in the database
+      await Promise.all(
+        Array.from(selectedDocs).map(id =>
+          fetch('/api/knowledge', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, folderId }),
+          })
+        )
+      );
+      setKnowledge(knowledge.map(k =>
+        selectedDocs.has(k.id) ? { ...k, folderId: folderId || undefined } : k
+      ));
+    } catch (error) {
+      console.error('Failed to move documents:', error);
+    }
     setSelectedDocs(new Set());
     setBulkMode(false);
   };
