@@ -63,7 +63,9 @@ export async function POST(req: Request) {
         // Format as Q&A for optimal RAG retrieval
         const formattedContent = `Q: ${question.trim()}\nA: ${answer.trim()}`;
 
-        // Add document with embedding
+        console.log('[FAQ] Creating FAQ entry:', formattedContent.substring(0, 100));
+
+        // Add document with embedding - categoryId is now handled by addDocument
         const success = await addDocument(formattedContent, {
             type: 'faq',
             categoryId
@@ -73,22 +75,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Failed to process FAQ' }, { status: 500 });
         }
 
-        // Get the newly created document to update its category
-        const { data: newDoc } = await supabase
-            .from('documents')
-            .select('id')
-            .eq('content', formattedContent)
-            .order('id', { ascending: false })
-            .limit(1)
-            .single();
-
-        // Update category if provided
-        if (newDoc && categoryId) {
-            await supabase
-                .from('documents')
-                .update({ category_id: categoryId })
-                .eq('id', newDoc.id);
-        }
+        console.log('[FAQ] Successfully created FAQ entry');
 
         return NextResponse.json({
             success: true,

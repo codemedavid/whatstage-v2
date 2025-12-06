@@ -30,8 +30,12 @@ async function getEmbedding(text: string, inputType: 'query' | 'passage'): Promi
     return data.data[0].embedding;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function addDocument(content: string, metadata: any = {}) {
     try {
+        // Extract categoryId from metadata if provided
+        const categoryId = metadata.categoryId;
+
         // 1. Chunk the text
         const splitter = new RecursiveCharacterTextSplitter({
             chunkSize: 1000,
@@ -39,20 +43,33 @@ export async function addDocument(content: string, metadata: any = {}) {
         });
         const chunks = await splitter.createDocuments([content]);
 
+        console.log(`[RAG] Adding document with ${chunks.length} chunks, categoryId: ${categoryId || 'none'}`);
+
         // 2. Generate embeddings and store in Supabase
         for (const chunk of chunks) {
             const embedding = await getEmbedding(chunk.pageContent, 'passage');
 
-            const { error } = await supabase.from('documents').insert({
+            // Build insert object with optional category_id
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const insertData: any = {
                 content: chunk.pageContent,
                 metadata: { ...metadata, ...chunk.metadata },
                 embedding: embedding,
-            });
+            };
+
+            // Add category_id if provided
+            if (categoryId) {
+                insertData.category_id = categoryId;
+            }
+
+            const { error } = await supabase.from('documents').insert(insertData);
 
             if (error) {
                 console.error('Error inserting chunk:', error);
                 throw error;
             }
+
+            console.log(`[RAG] Inserted chunk: "${chunk.pageContent.substring(0, 50)}..."`);
         }
 
         return true;
