@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server';
 import { supabase } from '@/app/lib/supabase';
 
+// Validate UUID format
+function isValidUUID(str: string | null | undefined): boolean {
+    if (!str) return false;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(str);
+}
+
 // GET /api/workflows - List all workflows
 export async function GET() {
     try {
@@ -24,11 +31,14 @@ export async function POST(req: Request) {
         const body = await req.json();
         const { name, trigger_stage_id, workflow_data } = body;
 
+        // Validate trigger_stage_id is a valid UUID or set to null
+        const validStageId = isValidUUID(trigger_stage_id) ? trigger_stage_id : null;
+
         const { data, error } = await supabase
             .from('workflows')
             .insert({
                 name,
-                trigger_stage_id,
+                trigger_stage_id: validStageId,
                 workflow_data,
                 is_published: false,
             })
@@ -50,11 +60,14 @@ export async function PUT(req: Request) {
         const body = await req.json();
         const { id, name, trigger_stage_id, workflow_data } = body;
 
+        // Validate trigger_stage_id is a valid UUID or set to null
+        const validStageId = isValidUUID(trigger_stage_id) ? trigger_stage_id : null;
+
         const { data, error } = await supabase
             .from('workflows')
             .update({
                 name,
-                trigger_stage_id,
+                trigger_stage_id: validStageId,
                 workflow_data,
             })
             .eq('id', id)
@@ -69,3 +82,4 @@ export async function PUT(req: Request) {
         return NextResponse.json({ error: 'Failed to update workflow' }, { status: 500 });
     }
 }
+
