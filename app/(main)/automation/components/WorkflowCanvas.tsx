@@ -53,30 +53,18 @@ function WorkflowCanvasContent({ onSave, isSaving, initialData }: WorkflowCanvas
         if (initialData?.nodes && initialData?.edges) {
             setNodes(initialData.nodes);
             setEdges(initialData.edges);
-            // Immediately notify parent of initial data
-            if (onSave) {
-                onSave({ nodes: initialData.nodes, edges: initialData.edges });
-            }
-        } else if (onSave) {
-            // For new workflow (no initial data), send default nodes
-            onSave({ nodes: initialNodes, edges: initialEdges });
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initialData, setNodes, setEdges]);
 
-    // Track last sent data to avoid infinite loops
-    const lastSentData = useRef<string>('');
-
-    // Notify parent whenever nodes/edges change
+    // Auto-save with debounce (2 seconds after last change)
     useEffect(() => {
         if (!onSave) return;
 
-        const currentData = JSON.stringify({ nodes, edges });
-        // Only notify if data actually changed from last sent
-        if (currentData !== lastSentData.current) {
-            lastSentData.current = currentData;
+        const timer = setTimeout(() => {
             onSave({ nodes, edges });
-        }
+        }, 2000);
+
+        return () => clearTimeout(timer);
     }, [nodes, edges, onSave]);
 
     const onConnect = useCallback(

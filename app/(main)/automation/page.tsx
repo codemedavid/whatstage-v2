@@ -27,8 +27,7 @@ function AutomationPageContent() {
     const [generating, setGenerating] = useState(false);
     const [generateError, setGenerateError] = useState('');
 
-    // Save state tracking
-    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    // Track current workflow data from canvas
     const currentWorkflowDataRef = useRef<any>(null);
 
     useEffect(() => {
@@ -71,27 +70,17 @@ function AutomationPageContent() {
         }
     }, [workflowIdFromUrl]);
 
-    // Called whenever workflow data changes (from canvas)
-    const savedDataRef = useRef<string>('');
-
+    // Called whenever workflow data changes (from canvas auto-save)
     const handleWorkflowChange = (workflowData: any) => {
         currentWorkflowDataRef.current = workflowData;
-        // Only mark as unsaved if different from last saved data
-        const currentJson = JSON.stringify(workflowData);
-        if (savedDataRef.current && currentJson !== savedDataRef.current) {
-            setHasUnsavedChanges(true);
-        } else if (!savedDataRef.current) {
-            // First data received - mark as unsaved since it's a new workflow
-            if (!workflowId) {
-                setHasUnsavedChanges(true);
-            }
-            savedDataRef.current = currentJson;
-        }
     };
 
     // Explicit save button handler
     const handleSaveClick = async () => {
-        if (!currentWorkflowDataRef.current) return;
+        if (!currentWorkflowDataRef.current) {
+            alert('No workflow data to save. Please add some nodes first.');
+            return;
+        }
         await handleSave(currentWorkflowDataRef.current);
     };
 
@@ -128,9 +117,6 @@ function AutomationPageContent() {
                 const data = await res.json();
                 setWorkflowId(data.id);
             }
-            // Mark as saved and update saved reference
-            savedDataRef.current = JSON.stringify(workflowData);
-            setHasUnsavedChanges(false);
         } catch (error) {
             console.error('Error saving workflow:', error);
         } finally {
@@ -284,27 +270,23 @@ function AutomationPageContent() {
                     </button>
                     <button
                         onClick={handleSaveClick}
-                        disabled={isSaving || !hasUnsavedChanges}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm ${hasUnsavedChanges
-                            ? 'bg-green-600 hover:bg-green-700 text-white'
-                            : 'bg-gray-100 text-gray-500 cursor-not-allowed'
-                            }`}
+                        disabled={isSaving}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm bg-green-600 hover:bg-green-700 text-white disabled:opacity-50"
                     >
                         <Save size={16} />
-                        {isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save Workflow' : 'Saved'}
+                        {isSaving ? 'Saving...' : 'Save'}
                     </button>
-                    {workflowId && (
-                        <button
-                            onClick={() => handlePublish()}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm ${isPublished
-                                ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                : 'bg-blue-600 hover:bg-blue-700 text-white'
-                                }`}
-                        >
-                            <Play size={16} />
-                            {isPublished ? 'Unpublish' : 'Publish'}
-                        </button>
-                    )}
+                    <button
+                        onClick={() => handlePublish()}
+                        disabled={!workflowId}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm ${isPublished
+                            ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            : 'bg-blue-600 hover:bg-blue-700 text-white'
+                            } ${!workflowId ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                        <Play size={16} />
+                        {isPublished ? 'Unpublish' : 'Publish'}
+                    </button>
                 </div>
             </header>
 
