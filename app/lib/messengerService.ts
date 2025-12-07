@@ -5,26 +5,70 @@ export interface MessengerSendOptions {
     tag?: 'ACCOUNT_UPDATE' | 'CONFIRMED_EVENT_UPDATE' | 'POST_PURCHASE_UPDATE';
 }
 
-export async function sendMessengerMessage(
-    psid: string,
-    text: string,
-    options: MessengerSendOptions = {}
-): Promise<boolean> {
+// Cache for page tokens to avoid repeated DB calls
+const pageTokenCache = new Map<string, { token: string; fetchedAt: number }>();
+const PAGE_TOKEN_CACHE_MS = 60000; // 1 minute cache
+
+// Get page access token - prioritizes OAuth connected_pages, falls back to bot_settings
+async function getPageAccessToken(): Promise<string | null> {
+    const now = Date.now();
+
+    // Check cache first
+    const cached = pageTokenCache.get('default');
+    if (cached && now - cached.fetchedAt < PAGE_TOKEN_CACHE_MS) {
+        return cached.token;
+    }
+
     try {
-        // Get page access token
+        // First try to get an active connected page (OAuth flow)
+        const { data: connectedPage, error: connectedError } = await supabase
+            .from('connected_pages')
+            .select('page_access_token')
+            .eq('is_active', true)
+            .limit(1)
+            .single();
+
+        if (!connectedError && connectedPage?.page_access_token) {
+            pageTokenCache.set('default', { token: connectedPage.page_access_token, fetchedAt: now });
+            console.log('[MessengerService] Using OAuth connected page token');
+            return connectedPage.page_access_token;
+        }
+
+        // Fallback to bot_settings (legacy manual token)
         const { data: settings } = await supabase
             .from('bot_settings')
             .select('facebook_page_access_token')
             .limit(1)
             .single();
 
-        const PAGE_ACCESS_TOKEN = settings?.facebook_page_access_token || process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+        const token = settings?.facebook_page_access_token || process.env.FACEBOOK_PAGE_ACCESS_TOKEN || null;
+
+        if (token) {
+            pageTokenCache.set('default', { token, fetchedAt: now });
+            console.log('[MessengerService] Using bot_settings/env token (fallback)');
+        }
+
+        return token;
+    } catch (error) {
+        console.error('[MessengerService] Error fetching page token:', error);
+        return process.env.FACEBOOK_PAGE_ACCESS_TOKEN || null;
+    }
+}
+
+export async function sendMessengerMessage(
+    psid: string,
+    text: string,
+    options: MessengerSendOptions = {}
+): Promise<boolean> {
+    try {
+        const PAGE_ACCESS_TOKEN = await getPageAccessToken();
 
         if (!PAGE_ACCESS_TOKEN) {
-            console.error('No Facebook Page Access Token available');
+            console.error('[MessengerService] No Facebook Page Access Token available');
             return false;
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const requestBody: any = {
             recipient: { id: psid },
             message: { text },
@@ -38,7 +82,7 @@ export async function sendMessengerMessage(
             requestBody.tag = options.tag;
         }
 
-        console.log('Sending Messenger message:', { psid, messagingType: options.messagingType, tag: options.tag });
+        console.log('[MessengerService] Sending message:', { psid, messagingType: options.messagingType, tag: options.tag });
 
         const res = await fetch(
             `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
@@ -52,14 +96,14 @@ export async function sendMessengerMessage(
         const resData = await res.json();
 
         if (!res.ok) {
-            console.error('Failed to send Messenger message:', resData);
+            console.error('[MessengerService] Failed to send message:', resData);
             return false;
         }
 
-        console.log('Messenger message sent successfully:', resData);
+        console.log('[MessengerService] Message sent successfully');
         return true;
     } catch (error) {
-        console.error('Error sending Messenger message:', error);
+        console.error('[MessengerService] Error sending message:', error);
         return false;
     }
 }
