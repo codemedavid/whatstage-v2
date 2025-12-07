@@ -13,6 +13,9 @@ export interface ReceiptDetectionResult {
     details?: string;
     extractedAmount?: string;
     extractedDate?: string;
+    receiverName?: string;      // Account name payment was sent TO
+    receiverNumber?: string;    // Account number payment was sent TO
+    paymentPlatform?: string;   // GCash, Maya, BDO, etc.
 }
 
 /**
@@ -86,13 +89,21 @@ Look for indicators such as:
 - Screenshot of banking app showing successful transfer
 - Official receipt layout
 
+IMPORTANT: Also extract the RECEIVER's details (the account the money was sent TO):
+- Receiver's name/account name
+- Receiver's phone number or account number
+- The payment platform (GCash, Maya, BDO, BPI, etc.)
+
 Respond ONLY with a JSON object in this exact format:
 {
     "isReceipt": true or false,
     "confidence": 0.0 to 1.0,
     "details": "Brief description of what you see",
     "extractedAmount": "Amount if visible, or null",
-    "extractedDate": "Date if visible, or null"
+    "extractedDate": "Date if visible, or null",
+    "receiverName": "Name of account that received payment, or null",
+    "receiverNumber": "Phone/Account number that received payment, or null",
+    "paymentPlatform": "GCash, Maya, BDO, BPI, etc. or null"
 }
 
 Be strict - only mark isReceipt as true if this clearly appears to be proof of payment.`
@@ -121,6 +132,9 @@ Be strict - only mark isReceipt as true if this clearly appears to be proof of p
                     details: result.details || undefined,
                     extractedAmount: result.extractedAmount || undefined,
                     extractedDate: result.extractedDate || undefined,
+                    receiverName: result.receiverName || undefined,
+                    receiverNumber: result.receiverNumber || undefined,
+                    paymentPlatform: result.paymentPlatform || undefined,
                 };
             }
         } catch (parseError) {

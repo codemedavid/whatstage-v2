@@ -212,6 +212,12 @@ export interface ImageContext {
     extractedAmount?: string;
     extractedDate?: string;
     imageUrl?: string;
+    // Receipt verification fields
+    receiverName?: string;
+    receiverNumber?: string;
+    paymentPlatform?: string;
+    verificationStatus?: 'verified' | 'mismatch' | 'unknown';
+    verificationDetails?: string;
 }
 
 export async function getBotResponse(
@@ -312,10 +318,40 @@ INSTRUCTION FOR PAYMENT QUERIES:
                 systemPrompt += `- Date: ${imageContext.extractedDate}
 `;
             }
-            systemPrompt += `
+            if (imageContext.receiverName) {
+                systemPrompt += `- Receiver Name: ${imageContext.receiverName}
+`;
+            }
+            if (imageContext.receiverNumber) {
+                systemPrompt += `- Receiver Number: ${imageContext.receiverNumber}
+`;
+            }
+            if (imageContext.paymentPlatform) {
+                systemPrompt += `- Platform: ${imageContext.paymentPlatform}
+`;
+            }
+
+            // Add verification status
+            if (imageContext.verificationStatus === 'verified') {
+                systemPrompt += `
+✅ PAYMENT VERIFIED: ${imageContext.verificationDetails}
+
+INSTRUCTION: The payment details MATCH our records! Thank the customer warmly, confirm the payment is verified and correct. Let them know their order will be processed. Be enthusiastic and appreciative!
+
+`;
+            } else if (imageContext.verificationStatus === 'mismatch') {
+                systemPrompt += `
+⚠️ PAYMENT MISMATCH: ${imageContext.verificationDetails}
+
+INSTRUCTION: Politely inform the customer that the payment details don't match our records. Ask them to double-check if they sent to the correct account. Provide our correct payment details. Be helpful and understanding - maybe they made an honest mistake.
+
+`;
+            } else {
+                systemPrompt += `
 INSTRUCTION: Thank the customer for their payment proof. Confirm you received it and will process it. Be warm and appreciative.
 
 `;
+            }
         } else if (imageContext.isReceipt) {
             systemPrompt += `- This might be a receipt but confidence is low (${Math.round(imageContext.confidence * 100)}%)
 `;

@@ -473,8 +473,57 @@ async function handleImageMessage(sender_psid: string, imageUrl: string, pageId?
             details: result.details,
             extractedAmount: result.extractedAmount,
             extractedDate: result.extractedDate,
-            imageUrl: imageUrl
+            imageUrl: imageUrl,
+            receiverName: result.receiverName,
+            receiverNumber: result.receiverNumber,
+            paymentPlatform: result.paymentPlatform,
         };
+
+        // If receipt detected, verify against stored payment methods
+        if (result.isReceipt && result.confidence >= 0.5) {
+            const paymentMethods = await getPaymentMethods();
+
+            if (paymentMethods.length > 0 && (result.receiverName || result.receiverNumber)) {
+                // Try to match against our payment methods
+                let matchedMethod: PaymentMethod | null = null;
+
+                for (const pm of paymentMethods) {
+                    // Check if receiver number matches
+                    if (result.receiverNumber && pm.account_number) {
+                        // Normalize numbers for comparison (remove spaces, dashes)
+                        const extractedNum = result.receiverNumber.replace(/[\s\-]/g, '');
+                        const storedNum = pm.account_number.replace(/[\s\-]/g, '');
+                        if (extractedNum.includes(storedNum) || storedNum.includes(extractedNum)) {
+                            matchedMethod = pm;
+                            break;
+                        }
+                    }
+                    // Check if receiver name matches
+                    if (result.receiverName && pm.account_name) {
+                        const extractedName = result.receiverName.toLowerCase();
+                        const storedName = pm.account_name.toLowerCase();
+                        if (extractedName.includes(storedName) || storedName.includes(extractedName)) {
+                            matchedMethod = pm;
+                            break;
+                        }
+                    }
+                }
+
+                if (matchedMethod) {
+                    imageContext.verificationStatus = 'verified';
+                    imageContext.verificationDetails = `Payment sent to ${matchedMethod.name} (${matchedMethod.account_name || matchedMethod.account_number}) matches our records!`;
+                    console.log('✅ Payment VERIFIED:', imageContext.verificationDetails);
+                } else {
+                    imageContext.verificationStatus = 'mismatch';
+                    const ourAccounts = paymentMethods.map(pm => `${pm.name}: ${pm.account_name || ''} ${pm.account_number || ''}`).join(', ');
+                    imageContext.verificationDetails = `Receipt shows payment to ${result.receiverName || result.receiverNumber}, but our accounts are: ${ourAccounts}`;
+                    console.log('⚠️ Payment MISMATCH:', imageContext.verificationDetails);
+                }
+            } else {
+                imageContext.verificationStatus = 'unknown';
+                imageContext.verificationDetails = 'Could not extract receiver details from receipt to verify';
+            }
+        }
 
         // If high-confidence receipt detected, also move to receipt stage
         if (isConfirmedReceipt(result)) {
