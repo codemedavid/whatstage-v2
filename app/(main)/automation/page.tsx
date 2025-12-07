@@ -1,8 +1,8 @@
 'use client';
 
 import WorkflowCanvas from './components/WorkflowCanvas';
-import { Play, Edit2, Beaker, Wand2 } from 'lucide-react';
-import { useState, useEffect, Suspense } from 'react';
+import { Play, Edit2, Beaker, Wand2, Save } from 'lucide-react';
+import { useState, useEffect, Suspense, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 
 function AutomationPageContent() {
@@ -26,6 +26,10 @@ function AutomationPageContent() {
     const [aiPrompt, setAiPrompt] = useState('');
     const [generating, setGenerating] = useState(false);
     const [generateError, setGenerateError] = useState('');
+
+    // Save state tracking
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+    const currentWorkflowDataRef = useRef<any>(null);
 
     useEffect(() => {
         // Fetch leads for test dropdown
@@ -67,6 +71,18 @@ function AutomationPageContent() {
         }
     }, [workflowIdFromUrl]);
 
+    // Called whenever workflow data changes (from canvas)
+    const handleWorkflowChange = (workflowData: any) => {
+        currentWorkflowDataRef.current = workflowData;
+        setHasUnsavedChanges(true);
+    };
+
+    // Explicit save button handler
+    const handleSaveClick = async () => {
+        if (!currentWorkflowDataRef.current) return;
+        await handleSave(currentWorkflowDataRef.current);
+    };
+
     const handleSave = async (workflowData: any) => {
         setIsSaving(true);
         try {
@@ -100,6 +116,8 @@ function AutomationPageContent() {
                 const data = await res.json();
                 setWorkflowId(data.id);
             }
+            // Mark as saved
+            setHasUnsavedChanges(false);
         } catch (error) {
             console.error('Error saving workflow:', error);
         } finally {
@@ -252,15 +270,28 @@ function AutomationPageContent() {
                         Test Run
                     </button>
                     <button
-                        onClick={() => handlePublish()}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm ${isPublished
-                            ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                            : 'bg-blue-600 hover:bg-blue-700 text-white'
+                        onClick={handleSaveClick}
+                        disabled={isSaving || !hasUnsavedChanges}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm ${hasUnsavedChanges
+                                ? 'bg-green-600 hover:bg-green-700 text-white'
+                                : 'bg-gray-100 text-gray-500 cursor-not-allowed'
                             }`}
                     >
-                        <Play size={16} />
-                        {isPublished ? 'Unpublish' : 'Publish Workflow'}
+                        <Save size={16} />
+                        {isSaving ? 'Saving...' : hasUnsavedChanges ? 'Save Workflow' : 'Saved'}
                     </button>
+                    {workflowId && (
+                        <button
+                            onClick={() => handlePublish()}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm ${isPublished
+                                ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                : 'bg-blue-600 hover:bg-blue-700 text-white'
+                                }`}
+                        >
+                            <Play size={16} />
+                            {isPublished ? 'Unpublish' : 'Publish'}
+                        </button>
+                    )}
                 </div>
             </header>
 
@@ -272,7 +303,7 @@ function AutomationPageContent() {
                     </div>
                 ) : (
                     <WorkflowCanvas
-                        onSave={handleSave}
+                        onSave={handleWorkflowChange}
                         isSaving={isSaving}
                         initialData={initialWorkflowData}
                     />
