@@ -483,45 +483,70 @@ async function handleImageMessage(sender_psid: string, imageUrl: string, pageId?
         if (result.isReceipt && result.confidence >= 0.5) {
             const paymentMethods = await getPaymentMethods();
 
-            if (paymentMethods.length > 0 && (result.receiverName || result.receiverNumber)) {
-                // Try to match against our payment methods
+            // Priority: Account NUMBER is the most reliable (names are often masked like "JO*N AN***O")
+            if (paymentMethods.length > 0) {
                 let matchedMethod: PaymentMethod | null = null;
+                let matchedBy = '';
 
-                for (const pm of paymentMethods) {
-                    // Check if receiver number matches
-                    if (result.receiverNumber && pm.account_number) {
-                        // Normalize numbers for comparison (remove spaces, dashes)
-                        const extractedNum = result.receiverNumber.replace(/[\s\-]/g, '');
-                        const storedNum = pm.account_number.replace(/[\s\-]/g, '');
-                        if (extractedNum.includes(storedNum) || storedNum.includes(extractedNum)) {
-                            matchedMethod = pm;
-                            break;
+                // FIRST: Try to match by account number (most reliable)
+                if (result.receiverNumber) {
+                    for (const pm of paymentMethods) {
+                        if (pm.account_number) {
+                            // Normalize numbers for comparison (remove spaces, dashes, parentheses)
+                            const extractedNum = result.receiverNumber.replace(/[\s\-\(\)]/g, '');
+                            const storedNum = pm.account_number.replace(/[\s\-\(\)]/g, '');
+
+                            // Check if last 4 digits match (often numbers start differently like +63 vs 09)
+                            const extractedLast4 = extractedNum.slice(-4);
+                            const storedLast4 = storedNum.slice(-4);
+
+                            if (extractedNum.includes(storedNum) ||
+                                storedNum.includes(extractedNum) ||
+                                (extractedLast4 === storedLast4 && extractedNum.length >= 8)) {
+                                matchedMethod = pm;
+                                matchedBy = 'account number';
+                                break;
+                            }
                         }
                     }
-                    // Check if receiver name matches
-                    if (result.receiverName && pm.account_name) {
-                        const extractedName = result.receiverName.toLowerCase();
-                        const storedName = pm.account_name.toLowerCase();
-                        if (extractedName.includes(storedName) || storedName.includes(extractedName)) {
-                            matchedMethod = pm;
-                            break;
+                }
+
+                // SECOND: Only if no number match AND name looks unmasked (no asterisks)
+                if (!matchedMethod && result.receiverName && !result.receiverName.includes('*')) {
+                    for (const pm of paymentMethods) {
+                        if (pm.account_name) {
+                            const extractedName = result.receiverName.toLowerCase().replace(/[^a-z]/g, '');
+                            const storedName = pm.account_name.toLowerCase().replace(/[^a-z]/g, '');
+                            if (extractedName.includes(storedName) || storedName.includes(extractedName)) {
+                                matchedMethod = pm;
+                                matchedBy = 'account name';
+                                break;
+                            }
                         }
                     }
                 }
 
                 if (matchedMethod) {
                     imageContext.verificationStatus = 'verified';
-                    imageContext.verificationDetails = `Payment sent to ${matchedMethod.name} (${matchedMethod.account_name || matchedMethod.account_number}) matches our records!`;
+                    imageContext.verificationDetails = `Payment sent to ${matchedMethod.name} - ${matchedBy} matches our records!`;
                     console.log('✅ Payment VERIFIED:', imageContext.verificationDetails);
-                } else {
+                } else if (result.receiverNumber) {
+                    // Only mark as mismatch if we have a number to compare
                     imageContext.verificationStatus = 'mismatch';
-                    const ourAccounts = paymentMethods.map(pm => `${pm.name}: ${pm.account_name || ''} ${pm.account_number || ''}`).join(', ');
-                    imageContext.verificationDetails = `Receipt shows payment to ${result.receiverName || result.receiverNumber}, but our accounts are: ${ourAccounts}`;
+                    const ourNumbers = paymentMethods
+                        .filter(pm => pm.account_number)
+                        .map(pm => `${pm.name}: ${pm.account_number}`)
+                        .join(', ');
+                    imageContext.verificationDetails = `Receipt shows payment to ${result.receiverNumber}, but our account numbers are: ${ourNumbers}`;
                     console.log('⚠️ Payment MISMATCH:', imageContext.verificationDetails);
+                } else {
+                    // No number to verify - accept but note we couldn't fully verify
+                    imageContext.verificationStatus = 'unknown';
+                    imageContext.verificationDetails = 'Could not extract account number from receipt for full verification, but receipt looks valid';
                 }
             } else {
                 imageContext.verificationStatus = 'unknown';
-                imageContext.verificationDetails = 'Could not extract receiver details from receipt to verify';
+                imageContext.verificationDetails = 'No payment methods configured to verify against';
             }
         }
 
