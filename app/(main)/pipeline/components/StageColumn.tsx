@@ -9,6 +9,7 @@ interface Lead {
     id: string;
     sender_id: string;
     name: string | null;
+    phone: string | null;
     message_count: number;
     last_message_at: string | null;
     ai_classification_reason: string | null;

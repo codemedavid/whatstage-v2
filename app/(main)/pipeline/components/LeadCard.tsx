@@ -8,6 +8,7 @@ interface Lead {
     id: string;
     sender_id: string;
     name: string | null;
+    phone: string | null;
     message_count: number;
     last_message_at: string | null;
     ai_classification_reason: string | null;
@@ -68,8 +69,8 @@ export default function LeadCard({ lead, index, onMoveClick, moveMenuOpen }: Lea
                     ref={provided.innerRef}
                     {...provided.draggableProps}
                     className={`bg-white rounded-xl p-4 transition-all group relative border ${snapshot.isDragging
-                            ? 'shadow-xl border-blue-400 rotate-2 z-50'
-                            : 'border-gray-100 hover:border-gray-200 shadow-sm hover:shadow-md'
+                        ? 'shadow-xl border-blue-400 rotate-2 z-50'
+                        : 'border-gray-100 hover:border-gray-200 shadow-sm hover:shadow-md'
                         }`}
                 >
                     {/* Header Row: Initials/Avatar + Name + Actions */}
@@ -94,9 +95,16 @@ export default function LeadCard({ lead, index, onMoveClick, moveMenuOpen }: Lea
                                 <h4 className="text-sm font-bold text-gray-900 leading-tight">
                                     {lead.name || `User ${lead.sender_id.slice(-4)}`}
                                 </h4>
-                                <span className="text-xs text-gray-400 font-medium">
-                                    ID: {lead.sender_id.slice(0, 8)}
-                                </span>
+                                {lead.phone ? (
+                                    <div className="flex items-center gap-1 text-xs text-emerald-600 font-medium">
+                                        <Phone size={10} />
+                                        {lead.phone}
+                                    </div>
+                                ) : (
+                                    <span className="text-xs text-gray-400 font-medium">
+                                        ID: {lead.sender_id.slice(0, 8)}
+                                    </span>
+                                )}
                             </div>
                         </div>
 
@@ -106,8 +114,8 @@ export default function LeadCard({ lead, index, onMoveClick, moveMenuOpen }: Lea
                                 onMoveClick(lead.id);
                             }}
                             className={`p-1.5 rounded-lg transition-colors ${moveMenuOpen
-                                    ? 'bg-gray-100 text-gray-900'
-                                    : 'text-gray-400 hover:text-gray-900 hover:bg-gray-50'
+                                ? 'bg-gray-100 text-gray-900'
+                                : 'text-gray-400 hover:text-gray-900 hover:bg-gray-50'
                                 }`}
                         >
                             <MoreHorizontal size={16} />

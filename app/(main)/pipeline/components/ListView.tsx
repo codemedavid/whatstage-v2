@@ -1,11 +1,12 @@
 'use client';
 
-import { MessageCircle, Clock, MoreHorizontal } from 'lucide-react';
+import { MessageCircle, Clock, MoreHorizontal, Phone } from 'lucide-react';
 
 interface Lead {
     id: string;
     sender_id: string;
     name: string | null;
+    phone: string | null;
     message_count: number;
     last_message_at: string | null;
     ai_classification_reason: string | null;
@@ -66,6 +67,7 @@ export default function ListView({ stages, onMoveLead }: ListViewProps) {
                 <thead>
                     <tr className="border-b border-gray-100 bg-gray-50/50 text-xs font-semibold text-gray-500 uppercase tracking-wider">
                         <th className="px-6 py-4">Lead</th>
+                        <th className="px-6 py-4">Phone</th>
                         <th className="px-6 py-4">Stage</th>
                         <th className="px-6 py-4">Status</th>
                         <th className="px-6 py-4">Last Active</th>
@@ -75,7 +77,7 @@ export default function ListView({ stages, onMoveLead }: ListViewProps) {
                 <tbody className="divide-y divide-gray-50">
                     {allLeads.length === 0 ? (
                         <tr>
-                            <td colSpan={5} className="px-6 py-12 text-center text-sm text-gray-400">
+                            <td colSpan={6} className="px-6 py-12 text-center text-sm text-gray-400">
                                 No leads found matching your criteria.
                             </td>
                         </tr>
@@ -99,6 +101,16 @@ export default function ListView({ stages, onMoveLead }: ListViewProps) {
                                             </p>
                                         </div>
                                     </div>
+                                </td>
+                                <td className="px-6 py-4">
+                                    {lead.phone ? (
+                                        <div className="flex items-center gap-1.5 text-sm text-emerald-600 font-medium">
+                                            <Phone size={14} />
+                                            {lead.phone}
+                                        </div>
+                                    ) : (
+                                        <span className="text-xs text-gray-400">—</span>
+                                    )}
                                 </td>
                                 <td className="px-6 py-4">
                                     <select
