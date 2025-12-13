@@ -113,7 +113,7 @@ export async function generateKnowledgeBase(
 }
 
 /**
- * Generate bot configuration (tone, initial rules) based on flow preferences
+ * Generate bot configuration (tone, initial rules, system prompt) based on flow preferences
  */
 export async function generateBotConfiguration(
     business: BusinessInfo,
@@ -122,15 +122,23 @@ export async function generateBotConfiguration(
     console.log('[SetupService] Generating config for flow:', preferences.style);
 
     const systemPrompt = `You are an expert conversation designer.
-    Your task is to analyze the user's desired conversation flow and style, and recommend:
+    Your task is to analyze the user's desired conversation flow and style, and generate:
     1. A short, descriptive "Bot Tone" string.
     2. A list of specific "Bot Rules" to enforce this behavior.
+    3. A comprehensive "System Prompt" (instructions) that tells the AI how to behave.
     
     OUTPUT FORMAT: JSON object.
     {
         "botTone": "string (max 50 chars)",
-        "rules": ["rule 1", "rule 2", "rule 3", "rule 4"]
+        "rules": ["rule 1", "rule 2", "rule 3", "rule 4"],
+        "systemPrompt": "A comprehensive instruction for the AI assistant describing how to behave, what tone to use, and how to handle conversations..."
     }
+    
+    The systemPrompt should be detailed and include:
+    - The personality and communication style
+    - How to greet customers
+    - How to handle common scenarios
+    - Key behaviors to follow
     `;
 
     const userPrompt = `
@@ -138,7 +146,7 @@ export async function generateBotConfiguration(
     Desired Conversation Flow: ${preferences.flowDescription}
     Speaking Style: ${preferences.style}
     
-    Generate the configuration.
+    Generate the configuration with a comprehensive system prompt/instructions.
     `;
 
     try {
@@ -149,6 +157,7 @@ export async function generateBotConfiguration(
                 { role: 'user', content: userPrompt }
             ],
             temperature: 0.7,
+            max_tokens: 2048,
         });
 
         let content = response.choices[0]?.message?.content || '{}';
@@ -162,35 +171,55 @@ export async function generateBotConfiguration(
         const config = JSON.parse(content);
 
         // Update bot_settings with tone
-        await supabase
-            .from('bot_settings')
-            .update({ bot_tone: config.botTone })
-            .neq('id', '00000000-0000-0000-0000-000000000000'); // Hack to update the single row if ID unknown, or better fetched first. 
-        // Better approach: fetch the single row ID first or just update all (should be 1)
-
-        // Actually, let's just update the single row.
         const { data: settings } = await supabase.from('bot_settings').select('id').single();
         if (settings) {
             await supabase
                 .from('bot_settings')
                 .update({ bot_tone: config.botTone })
                 .eq('id', settings.id);
+            console.log('[SetupService] Updated bot_tone:', config.botTone);
+        }
+
+        // Save system prompt to bot_instructions table
+        if (config.systemPrompt) {
+            // Check if instructions exist
+            const { data: existing } = await supabase
+                .from('bot_instructions')
+                .select('id')
+                .limit(1)
+                .single();
+
+            if (existing) {
+                // Update existing
+                await supabase
+                    .from('bot_instructions')
+                    .update({ instructions: config.systemPrompt, updated_at: new Date().toISOString() })
+                    .eq('id', existing.id);
+                console.log('[SetupService] Updated bot_instructions');
+            } else {
+                // Insert new
+                await supabase
+                    .from('bot_instructions')
+                    .insert({ instructions: config.systemPrompt });
+                console.log('[SetupService] Created bot_instructions');
+            }
         }
 
         // Add rules to bot_rules table
-        // First, optional: clear existing setup rules? Maybe not.
-
         if (config.rules && Array.isArray(config.rules)) {
             const rulesToInsert = config.rules.map((rule: string, index: number) => ({
                 rule: rule,
-                is_active: true, // Assuming column name is is_active or similar? 
-                // Let me double check bot_rules schema if possible, or assume 'enabled' based on common patterns.
-                // Re-checking workflowGenerator.ts... it uses 'enabled' and 'priority'.
                 enabled: true,
-                priority: index + 1
+                priority: index + 1,
+                category: 'general'
             }));
 
-            await supabase.from('bot_rules').insert(rulesToInsert);
+            const { error: rulesError } = await supabase.from('bot_rules').insert(rulesToInsert);
+            if (rulesError) {
+                console.error('[SetupService] Error inserting rules:', rulesError);
+            } else {
+                console.log('[SetupService] Inserted', rulesToInsert.length, 'rules');
+            }
         }
 
         return config;

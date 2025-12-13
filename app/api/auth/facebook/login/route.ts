@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 // Facebook OAuth configuration
 const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID;
@@ -14,7 +14,7 @@ const SCOPES = [
     'pages_show_list',           // List user's pages
 ].join(',');
 
-export async function GET() {
+export async function GET(request: NextRequest) {
     if (!FACEBOOK_APP_ID) {
         return NextResponse.json(
             { error: 'Facebook App ID not configured' },
@@ -22,8 +22,15 @@ export async function GET() {
         );
     }
 
-    // Generate a random state for CSRF protection
-    const state = Math.random().toString(36).substring(7);
+    // Get optional returnTo parameter (defaults to /settings)
+    const returnTo = request.nextUrl.searchParams.get('returnTo') || '/settings';
+
+    // Generate a random state for CSRF protection, include returnTo encoded
+    const stateData = {
+        csrf: Math.random().toString(36).substring(7),
+        returnTo: returnTo
+    };
+    const state = Buffer.from(JSON.stringify(stateData)).toString('base64');
 
     // Build Facebook OAuth URL
     const authUrl = new URL('https://www.facebook.com/v21.0/dialog/oauth');

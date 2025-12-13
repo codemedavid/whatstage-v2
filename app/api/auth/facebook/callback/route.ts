@@ -19,28 +19,47 @@ interface FacebookPage {
     };
 }
 
+// Helper to parse state and get returnTo path
+function parseState(state: string | null): { returnTo: string } {
+    const defaultReturnTo = '/settings';
+    if (!state) return { returnTo: defaultReturnTo };
+
+    try {
+        const decoded = Buffer.from(state, 'base64').toString('utf8');
+        const parsed = JSON.parse(decoded);
+        return { returnTo: parsed.returnTo || defaultReturnTo };
+    } catch {
+        // Old format or invalid state - use default
+        return { returnTo: defaultReturnTo };
+    }
+}
+
 export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
     const code = searchParams.get('code');
     const error = searchParams.get('error');
     const errorDescription = searchParams.get('error_description');
+    const state = searchParams.get('state');
+
+    // Parse state to get returnTo path
+    const { returnTo } = parseState(state);
 
     // Handle OAuth errors
     if (error) {
         console.error('Facebook OAuth error:', error, errorDescription);
-        const redirectUrl = new URL('/settings', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
+        const redirectUrl = new URL(returnTo, process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
         redirectUrl.searchParams.set('error', errorDescription || 'Facebook login failed');
         return NextResponse.redirect(redirectUrl.toString());
     }
 
     if (!code) {
-        const redirectUrl = new URL('/settings', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
+        const redirectUrl = new URL(returnTo, process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
         redirectUrl.searchParams.set('error', 'No authorization code received');
         return NextResponse.redirect(redirectUrl.toString());
     }
 
     if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET) {
-        const redirectUrl = new URL('/settings', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
+        const redirectUrl = new URL(returnTo, process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
         redirectUrl.searchParams.set('error', 'Facebook App not configured');
         return NextResponse.redirect(redirectUrl.toString());
     }
@@ -110,7 +129,7 @@ export async function GET(req: Request) {
         const sessionId = storeAuthSession(pagesPayload);
         console.log(`Stored ${pagesPayload.length} pages in session: ${sessionId}`);
 
-        const redirectUrl = new URL('/settings', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
+        const redirectUrl = new URL(returnTo, process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
         redirectUrl.searchParams.set('success', 'true');
         redirectUrl.searchParams.set('fb_session', sessionId);
 
@@ -118,8 +137,9 @@ export async function GET(req: Request) {
 
     } catch (error) {
         console.error('Facebook OAuth callback error:', error);
-        const redirectUrl = new URL('/settings', process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
+        const redirectUrl = new URL(returnTo, process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
         redirectUrl.searchParams.set('error', error instanceof Error ? error.message : 'Failed to connect Facebook');
         return NextResponse.redirect(redirectUrl.toString());
     }
 }
+
