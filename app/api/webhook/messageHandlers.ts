@@ -10,6 +10,7 @@ import { callSendAPI, sendAppointmentCard, sendPaymentMethodCards, sendProductCa
 import { getPageToken, getSettings } from './config';
 import { getPaymentMethods, getProductById, getProducts, getProperties, PaymentMethod } from './data';
 import { isAppointmentQuery, isPaymentQuery, isProductQuery, isPropertyQuery } from './keywords';
+import { markCustomerReplied, scheduleNextFollowUp } from '@/app/lib/followUpService';
 
 type WaitUntil = (promise: Promise<unknown>) => void;
 
@@ -397,6 +398,11 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
 export async function handleMessage(sender_psid: string, received_message: string, pageId?: string) {
     console.log('handleMessage called, generating response...');
 
+    // Mark customer as replied (resets follow-up tracking)
+    markCustomerReplied(sender_psid).catch(err => {
+        console.error('Error marking customer replied:', err);
+    });
+
     // Check if human takeover is active for this conversation
     const takeoverActive = await isTakeoverActive(sender_psid);
     if (takeoverActive) {
@@ -635,6 +641,11 @@ export async function handleMessage(sender_psid: string, received_message: strin
             }
         }
 
+        // Schedule next follow-up (will trigger if customer doesn't reply)
+        scheduleNextFollowUp(sender_psid).catch(err => {
+            console.error('Error scheduling follow-up:', err);
+        });
+
     } finally {
         // Turn off typing indicator
         await sendTypingIndicator(sender_psid, false, pageId);
@@ -644,6 +655,11 @@ export async function handleMessage(sender_psid: string, received_message: strin
 // Handle image messages - analyze and pass context to chatbot for intelligent response
 export async function handleImageMessage(sender_psid: string, imageUrl: string, pageId?: string, accompanyingText?: string) {
     console.log('handleImageMessage called, analyzing image...');
+
+    // Mark customer as replied (resets follow-up tracking)
+    markCustomerReplied(sender_psid).catch(err => {
+        console.error('Error marking customer replied:', err);
+    });
 
     // Check if human takeover is active
     const takeoverActive = await isTakeoverActive(sender_psid);
@@ -806,6 +822,10 @@ export async function handleImageMessage(sender_psid: string, imageUrl: string, 
             text: "Nakita ko po ang image niyo. May tanong ba kayo tungkol dito? 😊"
         }, pageId);
     } finally {
+        // Schedule next follow-up (will trigger if customer doesn't reply)
+        scheduleNextFollowUp(sender_psid).catch(err => {
+            console.error('Error scheduling follow-up:', err);
+        });
         await sendTypingIndicator(sender_psid, false, pageId);
     }
 }
