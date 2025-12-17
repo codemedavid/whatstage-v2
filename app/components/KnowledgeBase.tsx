@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Search, Plus, FileText, MoreHorizontal, Folder, FolderPlus, ChevronRight, ChevronDown, Move, Trash2, X, CheckSquare, Square, Tag, HelpCircle, Edit2, CreditCard } from 'lucide-react';
+import { Search, Plus, FileText, MoreHorizontal, Folder, FolderPlus, ChevronRight, ChevronDown, Move, Trash2, X, CheckSquare, Square, Tag, HelpCircle, Edit2, CreditCard, Upload } from 'lucide-react';
 import CategoryModal from './CategoryModal';
+import DocumentUploadModal from './DocumentUploadModal';
 
 interface Category {
   id: string;
@@ -56,6 +57,7 @@ export default function KnowledgeBase({ onSelect, onCategorySelect, onCreateDocu
   const [selectedDocs, setSelectedDocs] = useState<Set<string>>(new Set());
   const [bulkMode, setBulkMode] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   const contextMenuRef = useRef<HTMLDivElement>(null);
 
@@ -298,7 +300,7 @@ export default function KnowledgeBase({ onSelect, onCategorySelect, onCreateDocu
           <input
             type="text"
             placeholder="Search..."
-            className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border border-gray-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all"
+            className="w-full pl-8 pr-3 py-1.5 bg-gray-50 border text-black border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all"
           />
         </div>
         <button
@@ -307,6 +309,14 @@ export default function KnowledgeBase({ onSelect, onCategorySelect, onCreateDocu
           title={bulkMode ? "Exit Selection Mode" : "Select Items"}
         >
           <CheckSquare size={16} />
+        </button>
+
+        <button
+          onClick={() => setShowUploadModal(true)}
+          className="p-1.5 bg-white text-gray-600 rounded-md hover:bg-gray-100 transition-colors shadow-sm border border-gray-200"
+          title="Upload Document"
+        >
+          <Upload size={16} />
         </button>
 
         <button
@@ -543,6 +553,16 @@ export default function KnowledgeBase({ onSelect, onCategorySelect, onCreateDocu
         isOpen={showCategoryModal}
         onClose={() => setShowCategoryModal(false)}
         onSave={handleCreateCategory}
+      />
+
+      <DocumentUploadModal
+        isOpen={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        onSuccess={() => {
+          fetchData();
+          setShowUploadModal(false);
+        }}
+        categories={categories}
       />
     </div>
   );

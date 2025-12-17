@@ -1,12 +1,1 @@
-{
-    "crons": [
-        {
-            "path": "/api/cron/execute-workflows",
-            "schedule": "* * * * *"
-        },
-        {
-            "path": "/api/cron/follow-up-inactive",
-            "schedule": "* * * * *"
-        }
-    ]
-}
+{}

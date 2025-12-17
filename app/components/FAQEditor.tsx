@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, HelpCircle, MessageCircle, ChevronDown, Check, X } from 'lucide-react';
+import { Plus, Trash2, HelpCircle, MessageCircle, ChevronDown, Check, X, Sparkles } from 'lucide-react';
+import FAQGeneratorModal from './FAQGeneratorModal';
 
 interface FAQItem {
     id: string;
@@ -22,6 +23,7 @@ export default function FAQEditor({ categoryId, categoryName }: FAQEditorProps) 
     const [loading, setLoading] = useState(false);
     const [saving, setSaving] = useState(false);
     const [isAdding, setIsAdding] = useState(false);
+    const [showAIGenerator, setShowAIGenerator] = useState(false);
 
     const fetchFAQs = async () => {
         setLoading(true);
@@ -88,6 +90,13 @@ export default function FAQEditor({ categoryId, categoryName }: FAQEditorProps) 
                         <h2 className="text-2xl font-bold text-gray-800 tracking-tight">FAQ Editor</h2>
                         <p className="text-sm text-gray-500">Manage Q&A pairs for <span className="font-medium text-gray-700">{categoryName}</span></p>
                     </div>
+                    <button
+                        onClick={() => setShowAIGenerator(true)}
+                        className="px-3 py-2 flex items-center gap-2 text-sm font-medium text-purple-600 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors"
+                    >
+                        <Sparkles size={16} />
+                        AI Generate
+                    </button>
                 </div>
             </div>
 
@@ -214,6 +223,23 @@ export default function FAQEditor({ categoryId, categoryName }: FAQEditorProps) 
                     )}
                 </div>
             </div>
+
+            {/* AI Generator Modal */}
+            <FAQGeneratorModal
+                isOpen={showAIGenerator}
+                onClose={() => setShowAIGenerator(false)}
+                onSave={async (faqs, catId) => {
+                    const res = await fetch('/api/knowledge/generate-faq', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ faqs, categoryId: catId || categoryId, save: true }),
+                    });
+                    if (!res.ok) throw new Error('Failed to save FAQs');
+                    await fetchFAQs();
+                }}
+                categoryId={categoryId}
+                categoryName={categoryName}
+            />
         </div>
     );
 }

@@ -1,5 +1,7 @@
 
 import { createClient } from './supabaseClient';
+import { trackActivity } from './activityTrackingService';
+import { enableFollowUpsForLead } from './followUpService';
 
 export interface OrderItem {
     id: string;
@@ -24,9 +26,13 @@ export interface Order {
         name: string | null;
         email: string | null;
         phone: string | null;
+        sender_id?: string;
     };
     order_items?: OrderItem[];
 }
+
+// Order completion statuses that should trigger the order_completed activity tracking
+const ORDER_COMPLETION_STATUSES = ['confirmed', 'shipped', 'delivered'];
 
 export async function getOrders() {
     const supabase = createClient();
@@ -57,6 +63,25 @@ export async function getOrders() {
 export async function updateOrderStatus(orderId: string, status: string) {
     const supabase = createClient();
 
+    // First, get the order with lead info to track the activity
+    const { data: orderWithLead, error: fetchError } = await supabase
+        .from('orders')
+        .select(`
+            id,
+            lead_id,
+            total_amount,
+            leads (
+                sender_id
+            )
+        `)
+        .eq('id', orderId)
+        .single();
+
+    if (fetchError) {
+        console.error('Error fetching order for activity tracking:', fetchError);
+    }
+
+    // Update the order status
     const { data, error } = await supabase
         .from('orders')
         .update({ status })
@@ -67,6 +92,36 @@ export async function updateOrderStatus(orderId: string, status: string) {
     if (error) {
         console.error('Error updating order status:', error);
         throw error;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const leadData = orderWithLead?.leads as any;
+    const senderId = leadData?.sender_id;
+
+    // Track order_completed activity when status changes to a completion status
+    if (senderId && ORDER_COMPLETION_STATUSES.includes(status)) {
+        console.log(`[OrderService] Tracking order_completed for sender ${senderId}`);
+        trackActivity(
+            senderId,
+            'order_completed',
+            orderId,
+            `Order #${orderId.slice(-8)}`,
+            {
+                order_id: orderId,
+                status: status,
+                total_amount: orderWithLead?.total_amount
+            }
+        ).catch(err => {
+            console.error('[OrderService] Error tracking order_completed activity:', err);
+        });
+    }
+
+    // Re-enable follow-ups if order is cancelled (to re-engage the customer)
+    if (senderId && status === 'cancelled') {
+        console.log(`[OrderService] Order cancelled - re-enabling follow-ups for sender ${senderId}`);
+        enableFollowUpsForLead(senderId).catch(err => {
+            console.error('[OrderService] Error re-enabling follow-ups:', err);
+        });
     }
 
     return data;

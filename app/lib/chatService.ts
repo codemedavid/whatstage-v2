@@ -1,9 +1,11 @@
 import OpenAI from 'openai';
 import { searchDocuments } from './rag';
 import { supabase } from './supabase';
-import { getRecentActivities, buildActivityContextForAI, LeadActivity } from './activityTrackingService';
+import { getRecentActivities, buildActivityContextForAI, LeadActivity, findRecentActivityByType } from './activityTrackingService';
 import { getCatalogContext } from './productRagService';
 import { getCurrentCart, buildCartContextForAI } from './cartContextService';
+import { getLeadEntities, buildEntityContextForAI, extractEntitiesFromMessage, LeadEntity } from './entityTrackingService';
+import { calculateImportance } from './importanceService';
 
 const MAX_HISTORY = 10; // Reduced to prevent context overload
 
@@ -139,60 +141,87 @@ async function getPaymentMethods(): Promise<string> {
     }
 }
 
-// Fetch conversation history for a sender (last 20 messages)
+// Fetch conversation history for a sender using hybrid selection
+// Gets 5 most recent + up to 5 high-importance messages from last 50
 async function getConversationHistory(senderId: string): Promise<{ role: string; content: string }[]> {
     try {
-        const { data: messages, error } = await supabase
+        // Get the last 50 messages to select from
+        const { data: allMessages, error } = await supabase
             .from('conversations')
-            .select('role, content')
+            .select('id, role, content, importance_score, created_at')
             .eq('sender_id', senderId)
-            .order('created_at', { ascending: true })
-            .limit(MAX_HISTORY);
+            .order('created_at', { ascending: false })
+            .limit(50);
 
         if (error) {
             console.error('Error fetching conversation history:', error);
             return [];
         }
 
-        return messages || [];
+        if (!allMessages || allMessages.length === 0) {
+            return [];
+        }
+
+        // Take 5 most recent messages
+        const recentMessages = allMessages.slice(0, 5);
+        const recentIds = new Set(recentMessages.map(m => m.id));
+
+        // Get up to 5 high-importance messages (score >= 2) not already in recent
+        const highImportanceMessages = allMessages
+            .filter(m => (m.importance_score || 1) >= 2 && !recentIds.has(m.id))
+            .slice(0, 5);
+
+        // Combine and sort by created_at (oldest first for context)
+        const combinedMessages = [...recentMessages, ...highImportanceMessages]
+            .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+        // Limit to MAX_HISTORY total
+        const finalMessages = combinedMessages.slice(-MAX_HISTORY);
+
+        return finalMessages.map(m => ({ role: m.role, content: m.content }));
     } catch (error) {
         console.error('Error fetching conversation history:', error);
         return [];
     }
 }
 
-// Store a message (fire and forget - don't await)
+// Store a message with importance score (fire and forget - don't await)
 function storeMessageAsync(senderId: string, role: 'user' | 'assistant', content: string) {
     // Run in background - don't block the response
     (async () => {
         try {
-            // Delete oldest if over limit (simple approach - just insert and let periodic cleanup handle it)
+            // Calculate importance score based on content
+            const importance_score = calculateImportance(content, role);
+
+            // Insert message with importance score
             const { error: insertError } = await supabase
                 .from('conversations')
                 .insert({
                     sender_id: senderId,
                     role,
                     content,
+                    importance_score,
                 });
 
             if (insertError) {
                 console.error('Error storing message:', insertError);
             }
 
-            // Cleanup old messages in background
+            // Cleanup old LOW-importance messages only (preserve high-importance)
             const { count } = await supabase
                 .from('conversations')
                 .select('*', { count: 'exact', head: true })
                 .eq('sender_id', senderId);
 
-            if (count && count > MAX_HISTORY + 5) {
-                // Delete oldest ones to get back to MAX_HISTORY
+            if (count && count > MAX_HISTORY + 20) {
+                // Delete oldest LOW-importance ones to get back to reasonable size
                 const { data: oldMessages } = await supabase
                     .from('conversations')
                     .select('id')
                     .eq('sender_id', senderId)
+                    .eq('importance_score', 1) // Only delete normal importance
                     .order('created_at', { ascending: true })
-                    .limit(count - MAX_HISTORY);
+                    .limit(count - MAX_HISTORY - 10); // Keep some buffer
 
                 if (oldMessages && oldMessages.length > 0) {
                     await supabase
@@ -368,14 +397,16 @@ export async function getBotResponse(
         getCatalogContext(), // Get products, properties, payment methods
         getLatestConversationSummary(senderId), // Get long-term context summary
         getCurrentCart(senderId), // Get current cart status
+        getLeadEntities(senderId), // Get structured customer facts
     ]);
 
-    // Deference the promise results correctly (added summary and cart)
+    // Deference the promise results correctly (added summary, cart, and entities)
     const [rules, history, context, instructions, activities, catalogContext] = results.slice(0, 6) as [string[], { role: string; content: string }[], string, string, LeadActivity[], string];
     const summary = results[6] as string;
     const cart = results[7] as Awaited<ReturnType<typeof getCurrentCart>>;
+    const entities = results[8] as LeadEntity[];
 
-    console.log(`Parallel fetch took ${Date.now() - startTime}ms - rules: ${rules.length}, history: ${history.length}, activities: ${activities.length}, catalog: ${catalogContext.length} chars, isPaymentQuery: ${isPaymentRelated}, summary len: ${summary.length}, cart items: ${cart?.item_count || 0}`);
+    console.log(`Parallel fetch took ${Date.now() - startTime}ms - rules: ${rules.length}, history: ${history.length}, activities: ${activities.length}, catalog: ${catalogContext.length} chars, isPaymentQuery: ${isPaymentRelated}, summary len: ${summary.length}, cart items: ${cart?.item_count || 0}, entities: ${entities.length}`);
     console.log('[RAG CONTEXT]:', context ? context.substring(0, 500) + '...' : 'NO CONTEXT RETRIEVED');
 
 
@@ -383,17 +414,29 @@ export async function getBotResponse(
     const hasProducts = catalogContext && catalogContext.includes('PRODUCT CATALOG:');
     const hasProperties = catalogContext && catalogContext.includes('PROPERTY LISTINGS:');
 
+    // Anti-looping: Check for recent activities to avoid suggesting recently completed actions
+    const recentBooking = findRecentActivityByType(activities, 'appointment_booked', 24);
+    const recentOrder = findRecentActivityByType(activities, 'order_completed', 24);
+
+    console.log('[AntiLoop] Recent booking found:', !!recentBooking, recentBooking?.metadata);
+    console.log('[AntiLoop] Recent order found:', !!recentOrder);
+
     // Build dynamic UI TOOLS list
     let uiToolsList = '';
     let examplesList = '';
 
-    if (hasProducts) {
+    // Only show product tools if products exist AND user hasn't just completed an order
+    if (hasProducts && !recentOrder) {
         uiToolsList += `- [SHOW_PRODUCTS] : When user asks to see items/products or looking for recommendations.\n`;
         uiToolsList += `- [SHOW_CART] : When user asks to see their cart, order, or what they've added. Example: "ano na sa cart ko?" / "what's in my cart?"\n`;
         uiToolsList += `- [REMOVE_CART:product_name] : When user wants to REMOVE an item from their cart. Replace "product_name" with the actual product name they want removed.\n`;
 
         examplesList += `- Example: "Yes, meron kaming available. Check mo dito: [SHOW_PRODUCTS]"\n`;
         examplesList += `- Example: "Okay po, aalisin ko na yan sa cart mo. [REMOVE_CART:Product Name Here]"\n`;
+    } else if (hasProducts && recentOrder) {
+        // Still allow cart tools but hide SHOW_PRODUCTS from proactive suggestions
+        uiToolsList += `- [SHOW_CART] : When user asks to see their cart, order, or what they've added.\n`;
+        uiToolsList += `- [REMOVE_CART:product_name] : When user wants to REMOVE an item from their cart.\n`;
     }
 
     if (hasProperties) {
@@ -401,11 +444,12 @@ export async function getBotResponse(
         examplesList += `- Example: "Meron kaming available na properties! Check mo: [SHOW_PROPERTIES]" (SHORT - no details in text)\n`;
     }
 
-    // General tools always available
-    uiToolsList += `- [SHOW_BOOKING] : When user wants to schedule a visit, appointment, or consultation.\n`;
+    // General tools - conditionally show booking based on recent activity
+    if (!recentBooking) {
+        uiToolsList += `- [SHOW_BOOKING] : When user wants to schedule a visit, appointment, or consultation.\n`;
+        examplesList += `- Example: "Pwede tayo mag-schedule. [SHOW_BOOKING]"`;
+    }
     uiToolsList += `- [SHOW_PAYMENT_METHODS] : When user asks how to pay or asks for bank details.\n`;
-
-    examplesList += `- Example: "Pwede tayo mag-schedule. [SHOW_BOOKING]"`;
 
     // Build a clear system prompt optimized for Llama 3.1
     let systemPrompt = `You are ${botName}. Your style: ${botTone}.
@@ -498,6 +542,13 @@ INSTRUCTION FOR PAYMENT QUERIES:
 `;
     }
 
+    // Add Customer Profile (Structured Entities)
+    const entityContext = buildEntityContextForAI(entities);
+    if (entityContext) {
+        systemPrompt += `${entityContext}
+`;
+    }
+
     // Add Long-Term Context Summary (Memory)
     if (summary && summary.trim().length > 0) {
         systemPrompt += `LONG TERM MEMORY (Customer Context):
@@ -512,6 +563,30 @@ IMPORTANT: Use this context to remember what the customer previously said, their
     const activityContext = buildActivityContextForAI(activities);
     if (activityContext) {
         systemPrompt += `${activityContext}
+`;
+    }
+
+    // Anti-looping context injection: Guide the AI to avoid suggesting recently completed actions
+    if (recentBooking) {
+        const bookingDate = recentBooking.metadata?.appointment_date || 'soon';
+        const bookingTime = recentBooking.metadata?.start_time || '';
+        systemPrompt += `
+IMPORTANT - ANTI-LOOP CONTEXT:
+The customer has ALREADY booked an appointment${bookingTime ? ` at ${bookingTime}` : ''}${bookingDate !== 'soon' ? ` on ${bookingDate}` : ''}.
+- Do NOT ask them to book again or suggest scheduling.
+- If they ask about booking, acknowledge their existing appointment first.
+- Only offer to reschedule if they explicitly ask to change their booking.
+
+`;
+    }
+    if (recentOrder) {
+        systemPrompt += `
+IMPORTANT - ANTI-LOOP CONTEXT:
+The customer has recently completed an order.
+- Focus on order status, delivery updates, or customer support.
+- Do NOT proactively push new products unless they explicitly ask.
+- If they ask about products, you can still help but don't be pushy.
+
 `;
     }
 
@@ -674,6 +749,11 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
 
         // Store bot response (fire and forget)
         storeMessageAsync(senderId, 'assistant', responseContent);
+
+        // Extract entities from this exchange (fire and forget - don't block response)
+        extractEntitiesFromMessage(senderId, userMessage, responseContent).catch(err => {
+            console.error('[EntityTracking] Background extraction error:', err);
+        });
 
         console.log(`Total response time: ${Date.now() - startTime} ms`);
         return responseContent;

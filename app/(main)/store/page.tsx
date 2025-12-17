@@ -324,6 +324,8 @@ export default function StorePage() {
 
     const handleEditProperty = (property: Property) => {
         setEditingProperty(property);
+        // Handle both new imageUrls array and legacy imageUrl field
+        const imageUrls = (property as any).image_urls || (property.image_url ? [property.image_url] : []);
         setPropertyFormData({
             title: property.title,
             description: property.description,
@@ -333,7 +335,7 @@ export default function StorePage() {
             bathrooms: property.bathrooms,
             sqft: property.sqft,
             status: property.status,
-            imageUrl: property.image_url,
+            imageUrls: imageUrls,
             isActive: property.is_active,
             // New fields
             propertyType: property.property_type,
@@ -406,26 +408,45 @@ export default function StorePage() {
     // --- SHARED FUNCTIONS ---
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+        const files = e.target.files;
+        if (!files || files.length === 0) return;
 
         setUploading(true);
         try {
-            const formData = new FormData();
-            formData.append('file', file);
-            const res = await fetch('/api/upload', { method: 'POST', body: formData });
-            const data = await res.json();
-            if (data.success && data.url) {
-                if (storeType === 'ecommerce') {
+            if (storeType === 'ecommerce') {
+                // E-commerce: single image upload
+                const file = files[0];
+                const formData = new FormData();
+                formData.append('file', file);
+                const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (data.success && data.url) {
                     setFormImageUrl(data.url);
-                } else {
-                    setPropertyFormData((prev: any) => ({ ...prev, imageUrl: data.url }));
                 }
+            } else {
+                // Real Estate: multiple image upload
+                const uploadedUrls: string[] = [];
+                for (const file of Array.from(files)) {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    if (data.success && data.url) {
+                        uploadedUrls.push(data.url);
+                    }
+                }
+                // Append to existing images
+                setPropertyFormData((prev: any) => ({
+                    ...prev,
+                    imageUrls: [...(prev.imageUrls || []), ...uploadedUrls]
+                }));
             }
         } catch (error) {
             console.error('Failed to upload image:', error);
         } finally {
             setUploading(false);
+            // Reset file input to allow re-selecting same files
+            e.target.value = '';
         }
     };
 

@@ -2,7 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Calendar, ShoppingCart, Activity, Phone, Mail, MessageCircle, Clock, CheckCircle, AlertCircle, User, CreditCard, ShoppingBag, FileText } from 'lucide-react';
+import { X, Calendar, ShoppingCart, Activity, Phone, Mail, MessageCircle, Clock, CheckCircle, AlertCircle, User, CreditCard, ShoppingBag, FileText, Brain, Bot } from 'lucide-react';
+import MemoryTab from './MemoryTab';
+import ResponseFeedback from '@/app/components/ResponseFeedback';
 
 interface LeadDetailsModalProps {
     isOpen: boolean;
@@ -16,12 +18,14 @@ interface LeadDetails {
     appointments: any[];
     orders: any[];
     activity: any[];
+    conversations?: { id: string; role: string; content: string; created_at: string }[];
 }
 
 export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadData }: LeadDetailsModalProps) {
-    const [activeTab, setActiveTab] = useState<'activity' | 'appointments' | 'orders' | 'form_data'>('activity');
+    const [activeTab, setActiveTab] = useState<'activity' | 'appointments' | 'orders' | 'form_data' | 'memory' | 'conversation'>('activity');
     const [data, setData] = useState<LeadDetails | null>(null);
     const [loading, setLoading] = useState(false);
+    const [conversations, setConversations] = useState<any[]>([]);
 
     useEffect(() => {
         if (isOpen && leadId) {
@@ -39,6 +43,15 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
             if (res.ok) {
                 const details = await res.json();
                 setData(details);
+
+                // Fetch conversation history for feedback
+                if (details.lead?.sender_id) {
+                    const convRes = await fetch(`/api/conversations?senderId=${details.lead.sender_id}&limit=50`);
+                    if (convRes.ok) {
+                        const convData = await convRes.json();
+                        setConversations(convData || []);
+                    }
+                }
 
                 // Auto-switch tab based on content priority
                 if (details.orders && details.orders.some((o: any) => o.status?.toLowerCase() === 'pending')) {
@@ -192,9 +205,11 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
                                 <div className="flex items-center gap-1 p-2 border-b border-gray-100 bg-white sticky top-0 z-10">
                                     {[
                                         { id: 'activity', label: 'Activity', icon: Activity },
+                                        { id: 'conversation', label: 'Chat', icon: MessageCircle },
                                         { id: 'appointments', label: 'Appointments', icon: Calendar },
                                         { id: 'orders', label: 'Orders', icon: ShoppingCart },
                                         { id: 'form_data', label: 'Form Data', icon: FileText },
+                                        { id: 'memory', label: 'Memory', icon: Brain },
                                     ].map((tab) => (
                                         <button
                                             key={tab.id}
@@ -446,6 +461,66 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
                                                     </div>
                                                 ))}
                                             </div>
+                                        </div>
+                                    )}
+
+                                    {activeTab === 'memory' && leadId && (
+                                        <MemoryTab leadId={leadId} />
+                                    )}
+
+                                    {activeTab === 'conversation' && (
+                                        <div className="space-y-4">
+                                            <h3 className="text-lg font-bold text-gray-900 mb-4">Conversation History</h3>
+
+                                            {conversations.length === 0 ? (
+                                                <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-gray-200">
+                                                    <MessageCircle size={40} className="mx-auto mb-3 text-gray-200" />
+                                                    <p className="text-gray-400">No conversation history available</p>
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-3">
+                                                    {conversations.map((msg: any, idx: number) => (
+                                                        <div
+                                                            key={msg.id || idx}
+                                                            className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                                                        >
+                                                            {msg.role === 'assistant' && (
+                                                                <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center flex-shrink-0">
+                                                                    <Bot size={14} className="text-teal-600" />
+                                                                </div>
+                                                            )}
+                                                            <div className={`max-w-[70%] group relative ${msg.role === 'user' ? 'order-first' : ''}`}>
+                                                                <div
+                                                                    className={`px-4 py-2 rounded-2xl text-sm ${msg.role === 'user'
+                                                                            ? 'bg-gray-900 text-white rounded-br-none'
+                                                                            : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none shadow-sm'
+                                                                        }`}
+                                                                >
+                                                                    {msg.content}
+                                                                </div>
+                                                                <div className="text-[10px] text-gray-400 mt-1 px-1">
+                                                                    {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                                </div>
+                                                                {msg.role === 'assistant' && displayLead?.sender_id && (
+                                                                    <div className="absolute -right-16 top-0">
+                                                                        <ResponseFeedback
+                                                                            senderId={displayLead.sender_id}
+                                                                            botMessage={msg.content}
+                                                                            userMessage={conversations[idx - 1]?.role === 'user' ? conversations[idx - 1].content : undefined}
+                                                                            compact={true}
+                                                                        />
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            {msg.role === 'user' && (
+                                                                <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                                                                    <User size={14} className="text-gray-600" />
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </div>

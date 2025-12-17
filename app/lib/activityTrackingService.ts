@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { disableFollowUpsForLead, enableFollowUpsForLead } from './followUpService';
 
 // Types
 export type ActivityType =
@@ -8,7 +9,8 @@ export type ActivityType =
     | 'appointment_booked'
     | 'appointment_cancelled'
     | 'payment_sent'
-    | 'add_to_cart';
+    | 'add_to_cart'
+    | 'order_completed';
 
 export interface LeadActivity {
     id: string;
@@ -21,8 +23,15 @@ export interface LeadActivity {
     created_at: string;
 }
 
+// Activity types that indicate a goal has been fulfilled (stop follow-ups)
+const GOAL_COMPLETED_ACTIVITIES: ActivityType[] = ['appointment_booked', 'order_completed'];
+
+// Activity types that indicate a goal was cancelled (resume follow-ups)
+const GOAL_CANCELLED_ACTIVITIES: ActivityType[] = ['appointment_cancelled'];
+
 /**
  * Track a customer activity (product view, property view, appointment, etc.)
+ * Also manages follow-up status based on goal completion
  */
 export async function trackActivity(
     senderId: string,
@@ -54,6 +63,19 @@ export async function trackActivity(
             console.error('Error tracking activity:', error);
         } else {
             console.log(`📊 Activity tracked: ${activityType} - ${itemName || itemId || 'N/A'} for sender ${senderId}`);
+
+            // Goal-based follow-up management:
+            // When a goal is completed (booked appointment, completed order), stop follow-ups
+            if (GOAL_COMPLETED_ACTIVITIES.includes(activityType)) {
+                console.log(`🎯 Goal completed (${activityType}) - disabling follow-ups for ${senderId}`);
+                await disableFollowUpsForLead(senderId);
+            }
+
+            // When a goal is cancelled, resume follow-ups to re-engage
+            if (GOAL_CANCELLED_ACTIVITIES.includes(activityType)) {
+                console.log(`🔄 Goal cancelled (${activityType}) - re-enabling follow-ups for ${senderId}`);
+                await enableFollowUpsForLead(senderId);
+            }
         }
     } catch (error) {
         console.error('Error in trackActivity:', error);
@@ -137,6 +159,12 @@ export function buildActivityContextForAI(activities: LeadActivity[]): string {
             case 'add_to_cart':
                 description = `Added "${activity.item_name || activity.item_id}" to cart`;
                 break;
+            case 'order_completed':
+                description = `Completed an order`;
+                if (activity.metadata?.order_id) {
+                    description += ` (Order #${activity.metadata.order_id})`;
+                }
+                break;
             default:
                 description = `${activity.activity_type}: ${activity.item_name || activity.item_id || 'N/A'}`;
         }
@@ -166,4 +194,36 @@ function formatTimeDiff(now: Date, past: Date): string {
     if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
 
     return past.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+}
+
+/**
+ * Check if a date string is within a certain number of hours from now
+ */
+export function isWithinHours(dateString: string, hours: number = 24): boolean {
+    const activityDate = new Date(dateString);
+    const now = new Date();
+    const hoursDiff = (now.getTime() - activityDate.getTime()) / (1000 * 60 * 60);
+    return hoursDiff >= 0 && hoursDiff <= hours;
+}
+
+/**
+ * Find the most recent activity of a specific type within a time window
+ * Useful for anti-looping logic to check if user recently completed an action
+ */
+export function findRecentActivityByType(
+    activities: LeadActivity[],
+    activityType: ActivityType,
+    withinHours: number = 24
+): LeadActivity | null {
+    if (!activities || activities.length === 0) {
+        return null;
+    }
+
+    for (const activity of activities) {
+        if (activity.activity_type === activityType && isWithinHours(activity.created_at, withinHours)) {
+            return activity;
+        }
+    }
+
+    return null;
 }

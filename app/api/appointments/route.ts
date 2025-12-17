@@ -143,6 +143,7 @@ export async function POST(request: NextRequest) {
         try {
             const { trackActivity } = await import('@/app/lib/activityTrackingService');
             const { moveLeadToAppointmentStage } = await import('@/app/lib/pipelineService');
+            const { generateConversationSummary } = await import('@/app/lib/chatService');
 
             // Track the activity
             await trackActivity(actualPsid, 'appointment_booked', data.id, 'Appointment', {
@@ -162,6 +163,11 @@ export async function POST(request: NextRequest) {
             // Trigger appointment-based workflows
             const { triggerWorkflowsForAppointment } = await import('@/app/lib/workflowEngine');
             await triggerWorkflowsForAppointment(data.id, actualPsid, appointment_date, start_time);
+
+            // Trigger milestone summary generation (fire and forget)
+            generateConversationSummary(actualPsid).catch(err => {
+                console.error('[MilestoneSummary] Error generating post-appointment summary:', err);
+            });
         } catch (activityError) {
             console.error('Error tracking appointment activity:', activityError);
             // Don't fail the booking if activity tracking fails

@@ -191,10 +191,8 @@ export default function AppointmentManager({ initialAppointments = [], initialSe
 
     // Filter appointments for the selected date
     const dailyAppointments = appointments.filter(apt => {
-        const aptDate = new Date(apt.appointment_date);
-        // Fix timezone issue by comparing date strings or using UTC consistently
-        // Simple approach: compare YYYY-MM-DD strings
-        const selStr = selectedDate.toISOString().split('T')[0];
+        // Use local date formatting to avoid UTC timezone conversion issues
+        const selStr = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
         const matchesDate = apt.appointment_date === selStr;
         const matchesStatus = apt.status !== 'cancelled';
 
@@ -234,7 +232,8 @@ export default function AppointmentManager({ initialAppointments = [], initialSe
         // Days
         for (let day = 1; day <= daysInMonth; day++) {
             const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day);
-            const dateStr = date.toISOString().split('T')[0];
+            // Use local date formatting to avoid UTC timezone conversion issues
+            const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
             const isToday = isSameDay(date, new Date());
             const isSelected = isSameDay(date, selectedDate);
 

@@ -28,6 +28,7 @@ interface Property {
     sqft: number | null;
     status: 'for_sale' | 'for_rent' | 'sold' | 'rented';
     image_url: string | null;
+    image_urls?: string[];
     is_active: boolean;
     property_type: string | null;
     year_built: number | null;
@@ -49,6 +50,12 @@ export default function PropertyDetailClient({
     relatedProperties,
     facebookPageId,
 }: PropertyDetailClientProps) {
+    // Get all images - use image_urls if available, fallback to image_url
+    const allImages = property.image_urls?.length
+        ? property.image_urls
+        : (property.image_url ? [property.image_url] : []);
+    const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+
     const formatPrice = (price: number | null) => {
         if (price === null) return 'Price on Request';
         return `₱${price.toLocaleString('en-PH', { minimumFractionDigits: 0 })}`;
@@ -80,13 +87,14 @@ export default function PropertyDetailClient({
                 </nav>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 mb-16">
-                    {/* Left Column - Image */}
-                    <div className="space-y-6">
+                    {/* Left Column - Images */}
+                    <div className="space-y-4">
+                        {/* Main Image */}
                         <div className="relative aspect-[16/9] lg:aspect-[4/3] bg-gray-100 rounded-3xl overflow-hidden shadow-sm">
-                            {property.image_url ? (
+                            {allImages.length > 0 ? (
                                 <img
-                                    src={property.image_url}
-                                    alt={property.title}
+                                    src={allImages[selectedImageIndex]}
+                                    alt={`${property.title} - Image ${selectedImageIndex + 1}`}
                                     className="w-full h-full object-cover"
                                 />
                             ) : (
@@ -97,7 +105,31 @@ export default function PropertyDetailClient({
                             <div className="absolute top-4 left-4 px-3 py-1 bg-black/50 backdrop-blur text-white text-xs font-bold uppercase rounded-full">
                                 {property.status.replace('_', ' ')}
                             </div>
+                            {allImages.length > 1 && (
+                                <div className="absolute bottom-4 right-4 px-3 py-1 bg-black/50 backdrop-blur text-white text-xs font-bold rounded-full">
+                                    {selectedImageIndex + 1} / {allImages.length}
+                                </div>
+                            )}
                         </div>
+
+                        {/* Thumbnail Strip */}
+                        {allImages.length > 1 && (
+                            <div className="flex gap-2 overflow-x-auto pb-2">
+                                {allImages.map((url, index) => (
+                                    <button
+                                        key={index}
+                                        onClick={() => setSelectedImageIndex(index)}
+                                        className={`flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border-2 transition-all ${selectedImageIndex === index ? 'border-emerald-500 ring-2 ring-emerald-500/30' : 'border-transparent hover:border-gray-300'}`}
+                                    >
+                                        <img
+                                            src={url}
+                                            alt={`Thumbnail ${index + 1}`}
+                                            className="w-full h-full object-cover"
+                                        />
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     {/* Right Column - Details */}

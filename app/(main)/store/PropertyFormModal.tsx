@@ -369,57 +369,70 @@ export default function PropertyFormModal({
 
                             {/* Images Card */}
                             <section className="bg-white rounded-3xl p-8 border border-gray-100 shadow-sm">
-                                <h3 className="text-xl font-bold text-gray-900 mb-6">Property Image</h3>
+                                <h3 className="text-xl font-bold text-gray-900 mb-6">Property Images</h3>
 
                                 <div className="space-y-4">
-                                    <div
-                                        onClick={() => fileInputRef.current?.click()}
-                                        className="relative aspect-[4/3] bg-[#F8FAFC] rounded-2xl border-2 border-dashed border-gray-200 hover:border-emerald-400 transition-all cursor-pointer overflow-hidden group flex flex-col items-center justify-center p-4"
-                                    >
-                                        {formData.imageUrl ? (
-                                            <img
-                                                src={formData.imageUrl}
-                                                alt="Property"
-                                                className="w-full h-full object-cover"
-                                            />
-                                        ) : (
-                                            <div className="text-center">
-                                                <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center shadow-sm mx-auto mb-4">
-                                                    {uploading ? <Loader2 className="animate-spin text-emerald-500" /> : <ImageIcon className="text-gray-400" size={24} />}
-                                                </div>
-                                                <p className="text-sm font-semibold text-gray-900">Click to upload</p>
-                                                <p className="text-xs text-gray-500 mt-1">First impression matters</p>
+                                    {/* Image Grid */}
+                                    <div className="grid grid-cols-3 gap-3">
+                                        {/* Existing Images */}
+                                        {(formData.imageUrls || []).map((url: string, index: number) => (
+                                            <div
+                                                key={index}
+                                                className={`relative aspect-square rounded-xl overflow-hidden group ${index === 0 ? 'ring-2 ring-emerald-500 ring-offset-2' : 'border border-gray-200'}`}
+                                            >
+                                                <img
+                                                    src={url}
+                                                    alt={`Property ${index + 1}`}
+                                                    className="w-full h-full object-cover"
+                                                />
+                                                {index === 0 && (
+                                                    <div className="absolute top-1 left-1 px-1.5 py-0.5 bg-emerald-500 text-white text-[10px] font-bold rounded">
+                                                        PRIMARY
+                                                    </div>
+                                                )}
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        const newUrls = [...(formData.imageUrls || [])];
+                                                        newUrls.splice(index, 1);
+                                                        setFormData((prev: any) => ({ ...prev, imageUrls: newUrls }));
+                                                    }}
+                                                    className="absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600"
+                                                >
+                                                    ×
+                                                </button>
                                             </div>
-                                        )}
+                                        ))}
 
-                                        <div className="absolute inset-0 bg-black/5 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <div className="bg-white/90 backdrop-blur px-4 py-2 rounded-full shadow-sm text-sm font-semibold text-gray-700">
-                                                Change Image
-                                            </div>
-                                        </div>
+                                        {/* Add Image Button */}
+                                        <button
+                                            onClick={() => fileInputRef.current?.click()}
+                                            disabled={uploading}
+                                            className="aspect-square rounded-xl border-2 border-dashed border-gray-300 flex flex-col items-center justify-center hover:bg-gray-50 hover:border-emerald-400 text-gray-400 hover:text-emerald-500 transition-all disabled:opacity-50"
+                                        >
+                                            {uploading ? (
+                                                <Loader2 className="animate-spin" size={24} />
+                                            ) : (
+                                                <>
+                                                    <Plus size={24} />
+                                                    <span className="text-xs mt-1">Add</span>
+                                                </>
+                                            )}
+                                        </button>
                                     </div>
+
                                     <input
                                         ref={fileInputRef}
                                         type="file"
                                         accept="image/*"
+                                        multiple
                                         onChange={onImageUpload}
                                         className="hidden"
                                     />
 
-                                    {/* Thumbnail Strip (Placeholder for multi-image) */}
-                                    <div className="grid grid-cols-4 gap-3">
-                                        {formData.imageUrl && (
-                                            <div className="aspect-square rounded-lg border-2 border-emerald-500 overflow-hidden p-1">
-                                                <img src={formData.imageUrl} className="w-full h-full object-cover rounded-md" />
-                                            </div>
-                                        )}
-                                        <button
-                                            onClick={() => fileInputRef.current?.click()}
-                                            className="aspect-square rounded-lg border border-dashed border-gray-300 flex items-center justify-center hover:bg-gray-50 text-gray-400 hover:text-emerald-500 transition-colors"
-                                        >
-                                            <Plus size={20} />
-                                        </button>
-                                    </div>
+                                    <p className="text-xs text-gray-500 text-center">
+                                        First image will be used as the primary thumbnail
+                                    </p>
                                 </div>
                             </section>
                         </div>

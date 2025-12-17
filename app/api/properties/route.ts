@@ -37,7 +37,7 @@ export async function POST(req: Request) {
         const body = await req.json();
         const {
             title, description, price, currency, address,
-            bedrooms, bathrooms, sqft, status, imageUrl, isActive,
+            bedrooms, bathrooms, sqft, status, imageUrl, imageUrls, isActive,
             // New fields
             propertyType, yearBuilt, lotArea, garageSpaces,
             downPayment, monthlyAmortization, paymentTerms
@@ -46,6 +46,10 @@ export async function POST(req: Request) {
         if (!title) {
             return NextResponse.json({ error: 'Title is required' }, { status: 400 });
         }
+
+        // Handle image URLs - support both single and multiple
+        const finalImageUrls = imageUrls || (imageUrl ? [imageUrl] : []);
+        const primaryImage = finalImageUrls.length > 0 ? finalImageUrls[0] : null;
 
         const { data, error } = await supabase
             .from('properties')
@@ -59,7 +63,8 @@ export async function POST(req: Request) {
                 bathrooms: bathrooms || null,
                 sqft: sqft || null,
                 status: status || 'for_sale',
-                image_url: imageUrl || null,
+                image_url: primaryImage,
+                image_urls: finalImageUrls,
                 is_active: isActive ?? true,
                 // Map camelCase to snake_case
                 property_type: propertyType || null,
@@ -106,8 +111,15 @@ export async function PATCH(req: Request) {
         if (updates.bathrooms !== undefined) dbUpdates.bathrooms = updates.bathrooms;
         if (updates.sqft !== undefined) dbUpdates.sqft = updates.sqft;
         if (updates.status !== undefined) dbUpdates.status = updates.status;
-        if (updates.imageUrl !== undefined) dbUpdates.image_url = updates.imageUrl;
         if (updates.isActive !== undefined) dbUpdates.is_active = updates.isActive;
+
+        // Handle image URLs - support both single and multiple
+        if (updates.imageUrls !== undefined) {
+            dbUpdates.image_urls = updates.imageUrls;
+            dbUpdates.image_url = updates.imageUrls.length > 0 ? updates.imageUrls[0] : null;
+        } else if (updates.imageUrl !== undefined) {
+            dbUpdates.image_url = updates.imageUrl;
+        }
 
         // New fields mapping
         if (updates.propertyType !== undefined) dbUpdates.property_type = updates.propertyType;

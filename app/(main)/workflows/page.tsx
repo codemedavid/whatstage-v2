@@ -111,7 +111,7 @@ export default function WorkflowsPage() {
                     <input
                         type="text"
                         placeholder="Search..."
-                        className="bg-transparent border-none outline-none text-sm w-64 text-gray-700 placeholder-gray-400"
+                        className="bg-transparent border text-black border-gray-300 outline-none text-sm w-64 text-gray-700 placeholder-gray-400"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                     />
