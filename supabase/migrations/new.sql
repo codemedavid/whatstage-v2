@@ -715,3 +715,79 @@ CREATE INDEX IF NOT EXISTS idx_orders_is_cod ON orders(is_cod) WHERE is_cod = tr
 -- Comments for documentation
 COMMENT ON COLUMN orders.payment_status IS 'Payment status: pending, paid, failed, refunded, cancelled';
 COMMENT ON COLUMN orders.is_cod IS 'Whether this is a Cash on Delivery order';
+
+-- ============================================================================
+-- LEAD ENTITIES TABLE
+-- Stores structured customer facts (name, preferences, budget) for AI context
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS lead_entities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sender_id TEXT NOT NULL,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('name', 'preference', 'budget', 'interest', 'contact', 'custom')),
+  entity_key TEXT NOT NULL,  -- e.g., 'preferred_property_type', 'budget_range', 'full_name'
+  entity_value TEXT NOT NULL,
+  confidence FLOAT DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
+  source TEXT DEFAULT 'ai_extraction' CHECK (source IN ('ai_extraction', 'user_provided', 'form_submission', 'manual')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(sender_id, entity_type, entity_key)
+);
+
+-- Index for fast retrieval by sender
+CREATE INDEX IF NOT EXISTS idx_lead_entities_sender_id ON lead_entities(sender_id);
+CREATE INDEX IF NOT EXISTS idx_lead_entities_type ON lead_entities(entity_type);
+
+-- Enable RLS
+ALTER TABLE lead_entities ENABLE ROW LEVEL SECURITY;
+
+-- Policy to allow all operations
+CREATE POLICY "Allow all operations on lead_entities" ON lead_entities
+  FOR ALL USING (true) WITH CHECK (true);
+
+-- Trigger for updated_at
+DROP TRIGGER IF EXISTS update_lead_entities_updated_at ON lead_entities;
+CREATE TRIGGER update_lead_entities_updated_at
+  BEFORE UPDATE ON lead_entities
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Add comment
+COMMENT ON TABLE lead_entities IS 'Stores structured customer facts (name, preferences, budget, etc.) extracted from conversations for personalization.';
+COMMENT ON COLUMN lead_entities.entity_type IS 'Category of the entity: name, preference, budget, interest, contact, custom';
+COMMENT ON COLUMN lead_entities.entity_key IS 'Specific key within the type, e.g., full_name, preferred_bedrooms, max_budget';
+COMMENT ON COLUMN lead_entities.confidence IS 'AI confidence score for extracted entities (0-1)';
+COMMENT ON COLUMN lead_entities.source IS 'How the entity was captured: ai_extraction, user_provided, form_submission, manual';
+
+-- ============================================================================
+-- HUMAN TAKEOVER SESSIONS TABLE
+-- Tracks when human agents take over conversations from the bot
+-- ============================================================================
+
+-- Add human_takeover_timeout_minutes to bot_settings if it doesn't exist
+ALTER TABLE bot_settings 
+ADD COLUMN IF NOT EXISTS human_takeover_timeout_minutes INT DEFAULT 5;
+
+-- Create the human takeover sessions table
+CREATE TABLE IF NOT EXISTS human_takeover_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  lead_sender_id TEXT NOT NULL UNIQUE,
+  last_human_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  timeout_minutes INT NOT NULL DEFAULT 5,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Index for fast lookups by sender
+CREATE INDEX IF NOT EXISTS idx_human_takeover_sender ON human_takeover_sessions(lead_sender_id);
+
+-- Enable RLS
+ALTER TABLE human_takeover_sessions ENABLE ROW LEVEL SECURITY;
+
+-- Policy to allow all operations
+CREATE POLICY "Allow all operations on human_takeover_sessions" ON human_takeover_sessions
+  FOR ALL USING (true) WITH CHECK (true);
+
+-- Comments
+COMMENT ON TABLE human_takeover_sessions IS 'Tracks active human agent takeover sessions to pause bot responses';
+COMMENT ON COLUMN human_takeover_sessions.lead_sender_id IS 'Facebook sender PSID of the lead';
+COMMENT ON COLUMN human_takeover_sessions.last_human_message_at IS 'Timestamp of last message from human agent';
+COMMENT ON COLUMN human_takeover_sessions.timeout_minutes IS 'How long to keep bot paused after human message';
