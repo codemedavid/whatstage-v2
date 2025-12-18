@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { ShoppingCart, ArrowRight, Loader2, MapPin, Phone, User, Check, Trash2, CreditCard, Package, Mail } from 'lucide-react';
 import Link from 'next/link';
-import { getGuestSessionId, isGuestSession, clearGuestSession } from '@/app/lib/guestSession';
+import { getGuestSessionId, isGuestSession, clearGuestSession, getFacebookParams } from '@/app/lib/guestSession';
 
 interface OrderItem {
     id: string;
@@ -26,8 +26,8 @@ interface Cart {
 function CheckoutContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
-    const psid = searchParams.get('psid');
-    const pageId = searchParams.get('pageId');
+    const urlPsid = searchParams.get('psid');
+    const urlPageId = searchParams.get('pageId');
 
     const [cart, setCart] = useState<Cart | null>(null);
     const [items, setItems] = useState<OrderItem[]>([]);
@@ -49,17 +49,30 @@ function CheckoutContent() {
     const [isGuest, setIsGuest] = useState(false);
 
     useEffect(() => {
-        // Use PSID from URL if available, otherwise check for guest session
-        const id = psid || getGuestSessionId();
-        setSessionId(id);
-        setIsGuest(id ? isGuestSession(id) : false);
-    }, [psid]);
+        // Get FB params from URL or storage
+        const { psid: fbPsid, pageId: fbPageId } = getFacebookParams(urlPsid, urlPageId);
+
+        if (fbPsid) {
+            setSessionId(fbPsid);
+            setIsGuest(false);
+        } else {
+            const guestId = getGuestSessionId();
+            setSessionId(guestId);
+            setIsGuest(!!guestId);
+        }
+    }, [urlPsid, urlPageId]);
 
     useEffect(() => {
         if (sessionId) {
             fetchCart();
         } else {
-            setLoading(false);
+            // Only stop loading if we're sure there's no session
+            // But with the logic above, we usually try to get one.
+            // If sessionId is still null (e.g. ssr or first render before effect), we wait.
+            // Actually, initial state is null, so this runs when it updates.
+            // If it stays null (no guest session, no fb session), we should probably stop loading.
+            const timeout = setTimeout(() => setLoading(false), 1000);
+            return () => clearTimeout(timeout);
         }
     }, [sessionId]);
 

@@ -47,3 +47,74 @@ export function clearGuestSession(): void {
 export function isGuestSession(sessionId: string): boolean {
     return sessionId.startsWith('guest_');
 }
+
+// ============================================================================
+// FACEBOOK PARAMETERS PERSISTENCE
+// Store Facebook parameters (psid, pageId) in localStorage so they persist
+// when users navigate between product pages after clicking from Messenger.
+// ============================================================================
+
+const FB_PSID_KEY = 'fb_sender_psid';
+const FB_PAGE_ID_KEY = 'fb_page_id';
+
+/**
+ * Stores Facebook parameters in localStorage if they are present.
+ * Call this when the page loads with URL parameters.
+ */
+export function storeFacebookParams(psid: string | null, pageId: string | null): void {
+    if (typeof window === 'undefined') return;
+
+    if (psid) {
+        localStorage.setItem(FB_PSID_KEY, psid);
+    }
+    if (pageId) {
+        localStorage.setItem(FB_PAGE_ID_KEY, pageId);
+    }
+}
+
+/**
+ * Gets the stored Facebook PSID from localStorage.
+ * Returns the stored value or empty string if not found.
+ */
+export function getStoredPsid(): string {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem(FB_PSID_KEY) || '';
+}
+
+/**
+ * Gets the stored Facebook Page ID from localStorage.
+ * Returns the stored value or empty string if not found.
+ */
+export function getStoredPageId(): string {
+    if (typeof window === 'undefined') return '';
+    return localStorage.getItem(FB_PAGE_ID_KEY) || '';
+}
+
+/**
+ * Gets Facebook params - first from URL, then from localStorage.
+ * Also stores them if found in URL.
+ */
+export function getFacebookParams(urlPsid: string | null, urlPageId: string | null): { psid: string; pageId: string } {
+    if (typeof window === 'undefined') return { psid: '', pageId: '' };
+
+    // If URL has params, store them and use them
+    if (urlPsid || urlPageId) {
+        storeFacebookParams(urlPsid, urlPageId);
+    }
+
+    // Return URL params if available, otherwise fall back to stored values
+    return {
+        psid: urlPsid || getStoredPsid(),
+        pageId: urlPageId || getStoredPageId(),
+    };
+}
+
+/**
+ * Clears stored Facebook parameters (e.g., when user logs out or session expires).
+ */
+export function clearFacebookParams(): void {
+    if (typeof window !== 'undefined') {
+        localStorage.removeItem(FB_PSID_KEY);
+        localStorage.removeItem(FB_PAGE_ID_KEY);
+    }
+}

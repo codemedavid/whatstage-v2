@@ -793,3 +793,34 @@ COMMENT ON TABLE human_takeover_sessions IS 'Tracks active human agent takeover 
 COMMENT ON COLUMN human_takeover_sessions.lead_sender_id IS 'Facebook sender PSID of the lead';
 COMMENT ON COLUMN human_takeover_sessions.last_human_message_at IS 'Timestamp of last message from human agent';
 COMMENT ON COLUMN human_takeover_sessions.timeout_minutes IS 'How long to keep bot paused after human message';
+
+-- ============================================================================
+-- SMART PASSIVE MODE FIELDS
+-- Adds columns to leads table for Smart Passive mode (AI detects need for human)
+-- ============================================================================
+
+-- Add needs_human_attention flag
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS needs_human_attention BOOLEAN DEFAULT false;
+
+-- Add timestamp for when Smart Passive mode was activated
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS smart_passive_activated_at TIMESTAMPTZ;
+
+-- Track how many questions in a row went unanswered/repeated
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS unanswered_question_count INT DEFAULT 0;
+
+-- Store the last few questions to detect repetition
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS recent_questions JSONB DEFAULT '[]'::jsonb;
+
+-- Store the reason why Smart Passive was activated (for agent visibility)
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS smart_passive_reason TEXT;
+
+-- Index for quickly finding leads needing human attention
+CREATE INDEX IF NOT EXISTS idx_leads_needs_human_attention ON leads(needs_human_attention) 
+  WHERE needs_human_attention = true;
+
+-- Comments
+COMMENT ON COLUMN leads.needs_human_attention IS 'True when AI has detected customer needs human agent assistance';
+COMMENT ON COLUMN leads.smart_passive_activated_at IS 'Timestamp when Smart Passive mode was activated';
+COMMENT ON COLUMN leads.unanswered_question_count IS 'Count of consecutive questions the AI could not answer satisfactorily';
+COMMENT ON COLUMN leads.recent_questions IS 'JSON array of recent questions for repetition detection';
+COMMENT ON COLUMN leads.smart_passive_reason IS 'Reason why Smart Passive was triggered (for agent visibility)';

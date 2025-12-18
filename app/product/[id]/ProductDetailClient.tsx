@@ -14,7 +14,7 @@ import {
     Loader2,
 } from 'lucide-react';
 import Link from 'next/link';
-import { getOrCreateGuestSessionId } from '@/app/lib/guestSession';
+import { getOrCreateGuestSessionId, getFacebookParams } from '@/app/lib/guestSession';
 
 interface ProductCategory {
     id: string;
@@ -55,8 +55,12 @@ export default function ProductDetailClient({
     facebookPageId,
 }: ProductDetailClientProps) {
     const searchParams = useSearchParams();
-    const senderPsid = searchParams.get('psid') || '';
-    const pageId = searchParams.get('pageId') || '';
+    const urlPsid = searchParams.get('psid');
+    const urlPageId = searchParams.get('pageId');
+
+    // State for Facebook params - will be hydrated from localStorage
+    const [senderPsid, setSenderPsid] = useState('');
+    const [pageId, setPageId] = useState('');
 
     const [selectedImageIndex, setSelectedImageIndex] = useState(0);
     const [isWishlisted, setIsWishlisted] = useState(false);
@@ -66,6 +70,13 @@ export default function ProductDetailClient({
     // Cart state
     const [addingToCart, setAddingToCart] = useState(false);
     const [showAddedToast, setShowAddedToast] = useState(false);
+
+    // On mount, get Facebook params from URL or localStorage
+    useEffect(() => {
+        const { psid, pageId: storedPageId } = getFacebookParams(urlPsid, urlPageId);
+        setSenderPsid(psid);
+        setPageId(storedPageId);
+    }, [urlPsid, urlPageId]);
 
     const productImages = product.image_url ? [product.image_url] : [];
 
@@ -278,7 +289,7 @@ export default function ProductDetailClient({
                                 </div>
                             )}
                             {product.description && (
-                                <p className="text-gray-600 leading-relaxed text-lg">
+                                <p className="text-gray-600 leading-relaxed text-lg whitespace-pre-wrap">
                                     {product.description}
                                 </p>
                             )}
