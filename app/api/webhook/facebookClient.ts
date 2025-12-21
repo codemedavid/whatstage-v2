@@ -1,5 +1,6 @@
 import { getPageToken } from './config';
 import type { PaymentMethod, Product, Property } from './data';
+import { withRetry, isTransientError } from '@/app/lib/retryHelper';
 
 const DEFAULT_APP_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://aphelion-photon.vercel.app';
 
@@ -42,25 +43,38 @@ export async function sendAppointmentCard(sender_psid: string, pageId?: string) 
     console.log('Sending appointment card:', JSON.stringify(requestBody, null, 2));
 
     try {
-        const res = await fetch(
-            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            }
-        );
+        await withRetry(async () => {
+            const res = await fetch(
+                `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                }
+            );
 
-        const resData = await res.json();
-        if (!res.ok) {
-            console.error('Failed to send appointment card:', resData);
-            return false;
-        }
+            const resData = await res.json();
+            if (!res.ok) {
+                // If it's a transient error, throw it so we retry
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Facebook API Error ${res.status}: ${JSON.stringify(resData)}`);
+                }
+                // For valid API errors (400, etc), don't retry, just log
+                console.error('Failed to send appointment card (Non-retryable):', resData);
+                throw new Error('Non-retryable Facebook API Error'); // Throw to exit retry loop if logic wasn't strict
+            }
+            return resData;
+        }, {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError
+        });
 
         console.log('Appointment card sent successfully');
         return true;
     } catch (error) {
-        console.error('Error sending appointment card:', error);
+        console.error('Error sending appointment card after retries:', error);
         return false;
     }
 }
@@ -105,25 +119,36 @@ export async function sendCancellationConfirmation(
     console.log('Sending cancellation confirmation:', JSON.stringify(requestBody, null, 2));
 
     try {
-        const res = await fetch(
-            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            }
-        );
+        await withRetry(async () => {
+            const res = await fetch(
+                `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                }
+            );
 
-        const resData = await res.json();
-        if (!res.ok) {
-            console.error('Failed to send cancellation confirmation:', resData);
-            return false;
-        }
+            const resData = await res.json();
+            if (!res.ok) {
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Facebook API Error ${res.status}: ${JSON.stringify(resData)}`);
+                }
+                console.error('Failed to send cancellation confirmation (Non-retryable):', resData);
+                throw new Error('Non-retryable Facebook API Error');
+            }
+            return resData;
+        }, {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError
+        });
 
         console.log('Cancellation confirmation sent successfully');
         return true;
     } catch (error) {
-        console.error('Error sending cancellation confirmation:', error);
+        console.error('Error sending cancellation confirmation after retries:', error);
         return false;
     }
 }
@@ -221,25 +246,36 @@ export async function sendProductCards(sender_psid: string, products: Product[],
     console.log('Sending product cards:', JSON.stringify(requestBody, null, 2));
 
     try {
-        const res = await fetch(
-            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            }
-        );
+        await withRetry(async () => {
+            const res = await fetch(
+                `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                }
+            );
 
-        const resData = await res.json();
-        if (!res.ok) {
-            console.error('Failed to send product cards:', resData);
-            return false;
-        }
+            const resData = await res.json();
+            if (!res.ok) {
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Facebook API Error ${res.status}: ${JSON.stringify(resData)}`);
+                }
+                console.error('Failed to send product cards (Non-retryable):', resData);
+                throw new Error('Non-retryable Facebook API Error');
+            }
+            return resData;
+        }, {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError
+        });
 
         console.log('Product cards sent successfully');
         return true;
     } catch (error) {
-        console.error('Error sending product cards:', error);
+        console.error('Error sending product cards after retries:', error);
         return false;
     }
 }
@@ -311,25 +347,36 @@ export async function sendPropertyCards(sender_psid: string, properties: Propert
     console.log('Sending property cards:', JSON.stringify(requestBody, null, 2));
 
     try {
-        const res = await fetch(
-            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            }
-        );
+        await withRetry(async () => {
+            const res = await fetch(
+                `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                }
+            );
 
-        const resData = await res.json();
-        if (!res.ok) {
-            console.error('Failed to send property cards:', resData);
-            return false;
-        }
+            const resData = await res.json();
+            if (!res.ok) {
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Facebook API Error ${res.status}: ${JSON.stringify(resData)}`);
+                }
+                console.error('Failed to send property cards (Non-retryable):', resData);
+                throw new Error('Non-retryable Facebook API Error');
+            }
+            return resData;
+        }, {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError
+        });
 
         console.log('Property cards sent successfully');
         return true;
     } catch (error) {
-        console.error('Error sending property cards:', error);
+        console.error('Error sending property cards after retries:', error);
         return false;
     }
 }
@@ -397,25 +444,36 @@ export async function sendPaymentMethodCards(sender_psid: string, methods: Payme
     console.log('Sending payment cards:', JSON.stringify(requestBody, null, 2));
 
     try {
-        const res = await fetch(
-            `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody),
-            }
-        );
+        await withRetry(async () => {
+            const res = await fetch(
+                `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                }
+            );
 
-        const resData = await res.json();
-        if (!res.ok) {
-            console.error('Failed to send payment cards:', resData);
-            return false;
-        }
+            const resData = await res.json();
+            if (!res.ok) {
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Facebook API Error ${res.status}: ${JSON.stringify(resData)}`);
+                }
+                console.error('Failed to send payment cards (Non-retryable):', resData);
+                throw new Error('Non-retryable Facebook API Error');
+            }
+            return resData;
+        }, {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError
+        });
 
         console.log('Payment cards sent successfully');
         return true;
     } catch (error) {
-        console.error('Error sending payment cards:', error);
+        console.error('Error sending payment cards after retries:', error);
         return false;
     }
 }
@@ -462,19 +520,32 @@ export async function callSendAPI(sender_psid: string, response: any, pageId?: s
     console.log('Sending to Facebook:', JSON.stringify(requestBody, null, 2));
 
     try {
-        const res = await fetch(`https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
+        await withRetry(async () => {
+            const res = await fetch(`https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            });
+
+            const resText = await res.text();
+            console.log('Facebook API response:', res.status, resText);
+
+            if (!res.ok) {
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Facebook API Error ${res.status}: ${resText}`);
+                }
+                console.error('Unable to send message (Non-retryable):', resText);
+                throw new Error('Non-retryable Facebook API Error');
+            }
+            return resText;
+        }, {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError
         });
-
-        const resText = await res.text();
-        console.log('Facebook API response:', res.status, resText);
-
-        if (!res.ok) {
-            console.error('Unable to send message:', resText);
-        }
     } catch (error) {
-        console.error('Unable to send message:', error);
+        console.error('Unable to send message after retries:', error);
+        // Silent failure - do not expose to user
     }
 }

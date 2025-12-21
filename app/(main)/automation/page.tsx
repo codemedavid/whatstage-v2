@@ -36,6 +36,10 @@ function AutomationPageContent() {
     // Track current workflow data from canvas
     const currentWorkflowDataRef = useRef<WorkflowData | null>(null);
 
+    // Track saved state for dirty detection
+    const savedWorkflowDataRef = useRef<WorkflowData | null>(null);
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+
     // Publish confirmation modal state
     const [showPublishConfirmModal, setShowPublishConfirmModal] = useState(false);
     const [existingLeadsCount, setExistingLeadsCount] = useState(0);
@@ -70,6 +74,9 @@ function AutomationPageContent() {
                     setWorkflowName(data.name);
                     setIsPublished(data.is_published);
                     setInitialWorkflowData(data.workflow_data);
+                    // Initialize saved baseline for dirty tracking
+                    savedWorkflowDataRef.current = data.workflow_data;
+                    setHasUnsavedChanges(false);
                     setLoading(false);
                 })
                 .catch(err => {
@@ -87,8 +94,15 @@ function AutomationPageContent() {
     // Called whenever workflow data changes (from canvas auto-save)
     const handleWorkflowChange = (workflowData: WorkflowData) => {
         currentWorkflowDataRef.current = workflowData;
-        // Reset saved status if user makes changes
-        if (saveStatus === 'saved') {
+
+        // Compare with saved state to detect unsaved changes
+        const currentJson = JSON.stringify(workflowData);
+        const savedJson = JSON.stringify(savedWorkflowDataRef.current);
+        const isDirty = currentJson !== savedJson;
+        setHasUnsavedChanges(isDirty);
+
+        // Reset status to idle when there are new unsaved changes
+        if (isDirty && saveStatus === 'saved') {
             setSaveStatus('idle');
         }
     };
@@ -145,7 +159,13 @@ function AutomationPageContent() {
                 }
                 const data = await res.json();
                 setWorkflowId(data.id);
+                // Set baseline for new workflow
+                savedWorkflowDataRef.current = JSON.parse(JSON.stringify(workflowData));
             }
+
+            // Update the saved baseline after successful save
+            savedWorkflowDataRef.current = JSON.parse(JSON.stringify(workflowData));
+            setHasUnsavedChanges(false);
 
             // Show saved status
             setSaveStatus('saved');
@@ -357,15 +377,25 @@ function AutomationPageContent() {
                     <button
                         onClick={handleSaveClick}
                         disabled={saveStatus === 'saving'}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm text-white disabled:opacity-50 ${saveStatus === 'saved'
+                        className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors shadow-sm text-white disabled:opacity-50 ${saveStatus === 'saved' && !hasUnsavedChanges
                             ? 'bg-green-700 hover:bg-green-800'
                             : saveStatus === 'error'
                                 ? 'bg-red-600 hover:bg-red-700'
-                                : 'bg-green-600 hover:bg-green-700'
+                                : hasUnsavedChanges
+                                    ? 'bg-amber-500 hover:bg-amber-600 ring-2 ring-amber-300 ring-offset-1'
+                                    : 'bg-green-600 hover:bg-green-700'
                             }`}
                     >
                         <Save size={16} />
-                        {saveStatus === 'saving' ? 'Saving...' : saveStatus === 'saved' ? 'Saved!' : saveStatus === 'error' ? 'Error!' : 'Save'}
+                        {saveStatus === 'saving'
+                            ? 'Saving...'
+                            : saveStatus === 'saved' && !hasUnsavedChanges
+                                ? 'Saved!'
+                                : saveStatus === 'error'
+                                    ? 'Error!'
+                                    : hasUnsavedChanges
+                                        ? 'Save Changes'
+                                        : 'Save'}
                     </button>
                     <button
                         onClick={() => handlePublish()}

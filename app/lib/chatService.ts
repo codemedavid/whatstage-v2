@@ -7,6 +7,7 @@ import { getCurrentCart, buildCartContextForAI } from './cartContextService';
 import { getLeadEntities, buildEntityContextForAI, extractEntitiesFromMessage, LeadEntity } from './entityTrackingService';
 import { calculateImportance } from './importanceService';
 import { getSmartPassiveState, buildSmartPassiveContext, SmartPassiveState } from './smartPassiveService';
+import { withRetry, isTransientError } from './retryHelper';
 
 const MAX_HISTORY = 10; // Reduced to prevent context overload
 
@@ -859,38 +860,51 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
             completionOptions.max_tokens = 8192; // DeepSeek supports larger context
         }
 
-        const stream = await client.chat.completions.create(completionOptions as OpenAI.Chat.ChatCompletionCreateParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
+        const responseContent = await withRetry(async () => {
+            const stream = await client.chat.completions.create(completionOptions as OpenAI.Chat.ChatCompletionCreateParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
 
-        let responseContent = '';
-        let reasoningContent = '';
+            let contentBuffer = '';
+            let reasoningBuffer = '';
 
-        // Process the stream
-        for await (const chunk of stream) {
-            // Collect reasoning (thinking) content
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const reasoning = (chunk.choices[0]?.delta as any)?.reasoning_content;
-            if (reasoning) {
-                reasoningContent += reasoning;
+            // Process the stream
+            for await (const chunk of stream) {
+                // Collect reasoning (thinking) content
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const reasoning = (chunk.choices[0]?.delta as any)?.reasoning_content;
+                if (reasoning) {
+                    reasoningBuffer += reasoning;
+                }
+
+                // Collect actual response content
+                const content = chunk.choices[0]?.delta?.content;
+                if (content) {
+                    contentBuffer += content;
+                }
             }
 
-            // Collect actual response content
-            const content = chunk.choices[0]?.delta?.content;
-            if (content) {
-                responseContent += content;
+            if (reasoningBuffer) {
+                console.log('Reasoning:', reasoningBuffer.substring(0, 200) + '...');
             }
-        }
+
+            return contentBuffer;
+        }, {
+            maxAttempts: 3,
+            initialDelayMs: 1000,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError,
+            onRetry: (attempt, error) => {
+                console.warn(`LLM call failed (attempt ${attempt}), retrying...`, error.message);
+            }
+        });
 
         console.log(`LLM call took ${Date.now() - llmStart} ms`);
-        if (reasoningContent) {
-            console.log('Reasoning:', reasoningContent.substring(0, 200) + '...');
-        }
 
         // Handle empty responses with a fallback
         if (!responseContent || responseContent.trim() === '') {
-            console.warn('Empty response from LLM, using fallback');
-            const fallback = "Pasensya na po, may technical issue. Pwede po ba ulitin ang tanong niyo?";
-            storeMessageAsync(senderId, 'assistant', fallback);
-            return fallback;
+            console.warn('Empty response from LLM after retries');
+            // Gracefully degrade - don't send error message to user, just log it.
+            // The user won't get a reply, which is better than "technical issue" message.
+            return "";
         }
 
         // Store bot response (fire and forget)
@@ -905,7 +919,8 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
         return responseContent;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-        console.error("Error calling NVIDIA API:", error.response?.data || error.message || error);
-        return "Pasensya na po, may problema sa connection. Subukan ulit mamaya.";
+        console.error("Error calling NVIDIA API after retries:", error.response?.data || error.message || error);
+        // Silent failure - do not send error message to user
+        return "";
     }
 }
