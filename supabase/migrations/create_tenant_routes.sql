@@ -5,9 +5,9 @@
 
 CREATE TABLE IF NOT EXISTS tenant_routes (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  page_id TEXT NOT NULL UNIQUE,           -- Facebook Page ID
+  page_id TEXT UNIQUE,                    -- Facebook Page ID (NULL until customer connects)
   tenant_name TEXT NOT NULL,              -- Customer/Tenant Name (e.g., "Customer A")
-  destination_url TEXT NOT NULL,          -- Full webhook URL (e.g., "https://customer-a.vercel.app/api/webhook")
+  destination_url TEXT NOT NULL UNIQUE,   -- Full webhook URL (unique per tenant)
   secret_key TEXT,                        -- Optional: shared secret for request validation
   is_active BOOLEAN DEFAULT true,
   created_at TIMESTAMPTZ DEFAULT NOW(),
