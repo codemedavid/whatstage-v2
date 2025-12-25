@@ -11,7 +11,7 @@ import DashboardTabs from '../components/dashboard/DashboardTabs';
 import HumanTakeoverPage from '../components/dashboard/HumanTakeoverPage';
 import EcommerceDashboard from '../components/dashboard/ecommerce/EcommerceDashboard';
 import LeadDetailsModal from './pipeline/components/LeadDetailsModal';
-import type { DashboardData, FlaggedLead, EcommerceMetrics } from '../lib/dashboardData';
+import type { DashboardData, FlaggedLead, EcommerceMetrics, OverviewMetrics } from '../lib/dashboardData';
 
 interface DashboardClientProps {
     initialData: DashboardData;
@@ -24,6 +24,7 @@ export default function DashboardClient({ initialData, initialEcommerceMetrics }
     const [status, setStatus] = useState(initialData.status);
     const [flaggedLeads, setFlaggedLeads] = useState<FlaggedLead[]>(initialData.flaggedLeads);
     const [activeSessions, setActiveSessions] = useState(initialData.activeSessions);
+    const [overviewMetrics, setOverviewMetrics] = useState<OverviewMetrics | null>(initialData.overviewMetrics);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [activeTab, setActiveTab] = useState('Overview');
 
@@ -129,7 +130,7 @@ export default function DashboardClient({ initialData, initialEcommerceMetrics }
         <div className="grid grid-cols-12 grid-rows-2 gap-6 h-full min-h-[600px]">
             {/* Top Left: Sales Statistics - Spans 7 cols */}
             <div className="col-span-12 md:col-span-7 row-span-1">
-                <OverviewCards />
+                <OverviewCards data={overviewMetrics} />
             </div>
 
             {/* Top Right: Action Items - Spans 5 cols */}
