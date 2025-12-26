@@ -39,12 +39,6 @@ export async function handlePostWebhook(req: Request) {
     try {
         const body = await req.json();
 
-        // Check if this request was forwarded by the Central Router
-        const isForwarded = req.headers.get('X-Forwarded-By') === 'central-router';
-        if (isForwarded) {
-            console.log('[Webhook] Request forwarded by Central Router');
-        }
-
         console.log('Webhook POST received:', JSON.stringify(body, null, 2));
 
         if (body.object === 'page') {

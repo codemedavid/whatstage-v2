@@ -104,33 +104,6 @@ export async function POST(req: Request) {
             // Page is connected but webhook subscription failed - not a fatal error
         }
 
-        // Auto-link to Central Router (if CENTRAL_ROUTER_URL is configured)
-        const centralRouterUrl = process.env.CENTRAL_ROUTER_URL;
-        const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
-
-        if (centralRouterUrl && baseUrl) {
-            try {
-                const linkResponse = await fetch(`${centralRouterUrl}/api/central-router/register`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        page_id: pageId,
-                        destination_url: `${baseUrl}/api/webhook`,
-                    }),
-                });
-
-                const linkData = await linkResponse.json();
-                if (linkData.success) {
-                    console.log(`[Facebook Pages] Page ${pageId} linked to Central Router`);
-                } else {
-                    console.warn(`[Facebook Pages] Failed to link to Central Router: ${linkData.error}`);
-                }
-            } catch (routerError) {
-                console.warn('[Facebook Pages] Could not reach Central Router:', routerError);
-                // Non-fatal - page is still connected locally
-            }
-        }
-
         return NextResponse.json({
             success: true,
             webhookSubscribed: subscribeResult.success,
