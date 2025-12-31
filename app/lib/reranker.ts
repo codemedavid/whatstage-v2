@@ -171,7 +171,7 @@ async function crossEncoderRerank(
         const data = await response.json();
 
         // Map rankings back to documents
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         const rankings = data.rankings as Array<{ id: string; logit: number }>;
 
         return rankings.map(rank => {

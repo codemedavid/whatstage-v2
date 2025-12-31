@@ -61,7 +61,7 @@ export async function POST(req: Request) {
             .from('workflows')
             .insert({
                 name: finalName,
-                trigger_stage_id: (trigger_type === 'appointment_booked') ? null : validStageId,
+                trigger_stage_id: (trigger_type === 'appointment_booked' || trigger_type === 'digital_product_purchased') ? null : validStageId,
                 trigger_type: trigger_type || 'stage_change',
                 workflow_data: finalWorkflowData,
                 is_published: false,
@@ -91,7 +91,7 @@ export async function PUT(req: Request) {
             .from('workflows')
             .update({
                 name,
-                trigger_stage_id: (trigger_type === 'appointment_booked') ? null : validStageId,
+                trigger_stage_id: (trigger_type === 'appointment_booked' || trigger_type === 'digital_product_purchased') ? null : validStageId,
                 trigger_type: trigger_type || 'stage_change',
                 workflow_data,
             })

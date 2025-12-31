@@ -47,6 +47,42 @@ export async function POST(req: Request) {
     }
 }
 
+// PUT - Update existing document content
+export async function PUT(req: Request) {
+    try {
+        const body = await req.json();
+        const { id, text, categoryId } = body;
+
+        if (!id) {
+            return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
+        }
+
+        if (!text) {
+            return NextResponse.json({ error: 'Text is required' }, { status: 400 });
+        }
+
+        // Update the document content and optionally the category
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updates: any = { content: text };
+        if (categoryId !== undefined) updates.category_id = categoryId || null;
+
+        const { error } = await supabase
+            .from('documents')
+            .update(updates)
+            .eq('id', id);
+
+        if (error) {
+            console.error('Error updating document:', error);
+            return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+
+        return NextResponse.json({ success: true });
+    } catch (error) {
+        console.error('Error:', error);
+        return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    }
+}
+
 // PATCH - Update document's folder or category assignment
 export async function PATCH(req: Request) {
     try {

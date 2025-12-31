@@ -3,13 +3,13 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ShoppingBag, Building, ArrowRight, Loader2, Store } from 'lucide-react';
+import { ShoppingBag, Building, ArrowRight, Loader2, Store, BookOpen } from 'lucide-react';
 
 export default function SetupPage() {
     const router = useRouter();
     const [step, setStep] = useState(1);
     const [storeName, setStoreName] = useState('');
-    const [storeType, setStoreType] = useState<'ecommerce' | 'real_estate' | null>(null);
+    const [storeType, setStoreType] = useState<'ecommerce' | 'real_estate' | 'digital_product' | null>(null);
     const [loading, setLoading] = useState(false);
 
     const handleComplete = async () => {
@@ -138,6 +138,32 @@ export default function SetupPage() {
                                     {storeType === 'real_estate' && (
                                         <div className="absolute top-4 right-4 text-emerald-500">
                                             <div className="w-6 h-6 bg-emerald-500 rounded-full flex items-center justify-center">
+                                                <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                                            </div>
+                                        </div>
+                                    )}
+                                </button>
+
+                                {/* Digital Product Option */}
+                                <button
+                                    onClick={() => setStoreType('digital_product')}
+                                    className={`relative group p-6 rounded-3xl border-2 text-left transition-all duration-300 hover:shadow-lg md:col-span-2 ${storeType === 'digital_product'
+                                        ? 'border-violet-500 bg-violet-50/30'
+                                        : 'border-gray-100 bg-white hover:border-violet-200'
+                                        }`}
+                                >
+                                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-4 transition-colors ${storeType === 'digital_product' ? 'bg-violet-500 text-white' : 'bg-gray-100 text-gray-500 group-hover:bg-violet-100 group-hover:text-violet-600'
+                                        }`}>
+                                        <BookOpen size={28} />
+                                    </div>
+                                    <h3 className="text-xl font-bold text-gray-900 mb-2">Digital Products</h3>
+                                    <p className="text-gray-500 text-sm leading-relaxed">
+                                        For online courses, ebooks, digital downloads, and subscriptions. Sell digital content with instant access.
+                                    </p>
+
+                                    {storeType === 'digital_product' && (
+                                        <div className="absolute top-4 right-4 text-violet-500">
+                                            <div className="w-6 h-6 bg-violet-500 rounded-full flex items-center justify-center">
                                                 <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
                                             </div>
                                         </div>

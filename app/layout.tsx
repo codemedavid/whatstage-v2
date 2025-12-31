@@ -5,7 +5,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Aphelion Photon",
+  title: "WhatStage",
   description: "AI Knowledge Base Chatbot",
 };
 

@@ -31,7 +31,7 @@ export async function parsePDF(buffer: Buffer, filename: string): Promise<Parsed
 
         // Lazy load pdf-parse only when actually needed at runtime
         // This avoids the canvas polyfill warning during build
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+         
         const pdfModule = eval('require')('pdf-parse');
         const PDFParse = pdfModule.PDFParse;
 

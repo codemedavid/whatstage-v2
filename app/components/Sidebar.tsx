@@ -15,6 +15,7 @@ import {
     Calendar,
     Bot,
     FileText,
+    Download,
 } from 'lucide-react';
 
 import Link from 'next/link';
@@ -30,10 +31,11 @@ export default function Sidebar() {
     const navItems = [
         { icon: LayoutGrid, href: '/', label: 'Dashboard' },
         { icon: Kanban, href: '/pipeline', label: 'Pipeline' },
-        { icon: Bot, href: '/knowledge', label: 'Knowledge Base' },
+        { icon: Bot, href: '/knowledge', label: 'Chatbot' },
         { icon: FileText, href: '/forms', label: 'Forms' },
         { icon: Store, href: '/store', label: 'Store' },
         { icon: ShoppingBag, href: '/orders', label: 'Orders' },
+        { icon: Download, href: '/digital-orders', label: 'Digital Orders' },
         { icon: Calendar, href: '/appointments', label: 'Appointments' },
         { icon: Workflow, href: '/workflows', label: 'Workflows' },
         { icon: Settings, href: '/settings', label: 'Settings' },
@@ -47,7 +49,7 @@ export default function Sidebar() {
 
     return (
         <div
-            className={`${isCollapsed ? 'w-16' : 'w-56'} bg-[#0d2116] h-screen flex flex-col py-6 text-gray-400 border-r border-[#1a3828] flex-shrink-0 transition-all duration-300 ease-in-out`}
+            className={`${isCollapsed ? 'w-16' : 'w-56'} bg-[#0d2116] h-screen flex flex-col py-6 text-gray-400 border-r border-[#1a3828] flex-shrink-0 transition-all duration-300 ease-in-out relative group`}
         >
             {/* Logo and App Name */}
             <div className={`mb-8 flex items-center ${isCollapsed ? 'justify-center' : 'px-4'}`}>
@@ -106,15 +108,16 @@ export default function Sidebar() {
                     {!isCollapsed && <span className="whitespace-nowrap">Logout</span>}
                 </button>
 
-                {/* Toggle Button */}
-                <button
-                    onClick={() => setIsCollapsed(!isCollapsed)}
-                    className="flex items-center justify-center p-2 mt-2 hover:text-white hover:bg-white/10 rounded-lg transition-colors border border-[#1a3828]"
-                    title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                >
-                    {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
-                </button>
             </div>
+
+            {/* Toggle Button */}
+            <button
+                onClick={() => setIsCollapsed(!isCollapsed)}
+                className="absolute -right-3 top-1/2 transform -translate-y-1/2 z-50 w-6 h-12 bg-[#0d2116] rounded-full flex items-center justify-center text-gray-400 hover:text-white  shadow-md cursor-pointer hover:w-8 transition-all duration-200 group-hover:text-white"
+                title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+                {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+            </button>
         </div>
     );
 }

@@ -1,5 +1,6 @@
 
 import { NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { supabase } from '@/app/lib/supabase';
 
 // GET - Fetch current store settings
@@ -73,6 +74,7 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: error.message }, { status: 500 });
         }
 
+        revalidatePath('/');
         return NextResponse.json(data);
     } catch (error) {
         console.error('Error:', error);

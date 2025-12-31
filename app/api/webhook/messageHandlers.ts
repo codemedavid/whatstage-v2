@@ -6,13 +6,16 @@ import { analyzeImageForReceipt, isConfirmedReceipt } from '@/app/lib/receiptDet
 import { analyzeAndUpdateStage, getOrCreateLead, incrementMessageCount, moveLeadToReceiptStage, shouldAnalyzeStage, moveLeadToAppointmentStage } from '@/app/lib/pipelineService';
 import { supabase } from '@/app/lib/supabase';
 import { detectNeedsHumanAttention, activateSmartPassive, trackQuestion, isSmartPassiveActive, deactivateSmartPassive } from '@/app/lib/smartPassiveService';
+import { calculateTypingDelay, getMessageGapDelay, detectMessageComplexity, getThinkingDelay } from '@/app/lib/responseTimingService';
 
 import { trackActivity } from '@/app/lib/activityTrackingService';
-import { callSendAPI, sendAppointmentCard, sendPaymentMethodCards, sendProductCards, sendPropertyCards, sendTypingIndicator } from './facebookClient';
+import { callSendAPI, sendAppointmentCard, sendDigitalProductCards, sendPaymentMethodCards, sendProductCards, sendPropertyCards, sendTypingIndicator } from './facebookClient';
 import { getPageToken, getSettings } from './config';
-import { getPaymentMethods, getProductById, getProducts, getProperties, getPropertyById, PaymentMethod } from './data';
+import { getDigitalProductById, getDigitalProducts, getPaymentMethods, getProductById, getProducts, getProperties, getPropertyById, PaymentMethod } from './data';
 import { isAppointmentQuery, isPaymentQuery, isProductQuery, isPropertyQuery } from './keywords';
 import { markCustomerReplied, scheduleNextFollowUp } from '@/app/lib/followUpService';
+import { sendMessengerAttachment, AttachmentType } from '@/app/lib/messengerService';
+import { getMediaById, trackMediaUsage } from '@/app/lib/mediaLibraryService';
 
 type WaitUntil = (promise: Promise<unknown>) => void;
 
@@ -593,20 +596,40 @@ export async function handleMessage(sender_psid: string, received_message: strin
         const recommendPropertyMatch = rawResponseText.match(/\[RECOMMEND_PROPERTY:([^\]]+)\]/);
         const recommendedPropertyId = recommendPropertyMatch ? recommendPropertyMatch[1].trim() : null;
 
+        // Check for AI media attachment tag
+        const sendMediaMatch = rawResponseText.match(/\[SEND_MEDIA:([^\]]+)\]/);
+        const mediaIdToSend = sendMediaMatch ? sendMediaMatch[1].trim() : null;
+
+        // Check for digital product tags
+        const showDigitalProducts = rawResponseText.includes('[SHOW_DIGITAL_PRODUCTS]');
+        const recommendDigitalProductMatch = rawResponseText.match(/\[RECOMMEND_DIGITAL_PRODUCT:([^\]]+)\]/);
+        const recommendedDigitalProductId = recommendDigitalProductMatch ? recommendDigitalProductMatch[1].trim() : null;
+
         // Remove tags from text to send to user
         finalResponseText = finalResponseText
             .replace(/\[SHOW_PRODUCTS\]/g, '')
             .replace(/\[SHOW_PROPERTIES\]/g, '')
+            .replace(/\[SHOW_DIGITAL_PRODUCTS\]/g, '')
             .replace(/\[SHOW_BOOKING\]/g, '')
             .replace(/\[SHOW_PAYMENT_METHODS\]/g, '')
             .replace(/\[SHOW_CART\]/g, '')
             .replace(/\[REMOVE_CART:[^\]]+\]/g, '')
             .replace(/\[RECOMMEND_PRODUCT:[^\]]+\]/g, '')
             .replace(/\[RECOMMEND_PROPERTY:[^\]]+\]/g, '')
+            .replace(/\[RECOMMEND_DIGITAL_PRODUCT:[^\]]+\]/g, '')
+            .replace(/\[SEND_MEDIA:[^\]]+\]/g, '')
+            .replace(/\[media\]/gi, '') // Strip invalid [media] tag (AI sometimes outputs this incorrectly)
+            .replace(/\[video\]/gi, '') // Strip invalid [video] tag
+            .replace(/\[image\]/gi, '') // Strip invalid [image] tag
             .trim();
 
         // Send the AI's text response (possibly split into multiple messages)
         if (finalResponseText) {
+            // Add natural "thinking" delay before responding
+            const complexity = detectMessageComplexity(received_message);
+            const thinkingDelay = getThinkingDelay(complexity);
+            await new Promise(resolve => setTimeout(resolve, thinkingDelay));
+
             // Check if split messages is enabled
             const settings = await getSettings();
             const splitMessagesEnabled = settings?.split_messages ?? false;
@@ -619,16 +642,20 @@ export async function handleMessage(sender_psid: string, received_message: strin
                     .map(s => s.trim())
                     .filter(s => s.length > 0);
 
-                // Send each sentence as a separate message with slight delay
+                // Send each sentence as a separate message with natural delay
                 for (const sentence of sentences) {
                     await callSendAPI(sender_psid, { text: sentence }, pageId);
-                    // Small delay between messages to make it feel more natural
+                    // Natural gap between messages (500-1500ms) to feel like real chat
                     if (sentences.indexOf(sentence) < sentences.length - 1) {
-                        await new Promise(resolve => setTimeout(resolve, 300));
+                        const gapDelay = getMessageGapDelay();
+                        await new Promise(resolve => setTimeout(resolve, gapDelay));
                     }
                 }
             } else {
-                // Send as single message
+                // Send as single message (with typing delay if long)
+                const typingDelay = calculateTypingDelay(finalResponseText);
+                // Small delay proportional to response length (capped at 1.5s for single messages)
+                await new Promise(resolve => setTimeout(resolve, Math.min(typingDelay * 0.3, 1500)));
                 await callSendAPI(sender_psid, { text: finalResponseText }, pageId);
             }
         }
@@ -682,11 +709,66 @@ export async function handleMessage(sender_psid: string, received_message: strin
             await sendAppointmentCard(sender_psid, pageId);
         }
 
+        // Handle targeted digital product recommendation (single item)
+        if (recommendedDigitalProductId) {
+            console.log('AI triggered [RECOMMEND_DIGITAL_PRODUCT] for:', recommendedDigitalProductId);
+            const digitalProduct = await getDigitalProductById(recommendedDigitalProductId);
+            if (digitalProduct) {
+                await sendDigitalProductCards(sender_psid, [digitalProduct], pageId);
+            } else {
+                console.log('Recommended digital product not found, falling back to all digital products');
+                const digitalProducts = await getDigitalProducts();
+                if (digitalProducts.length > 0) {
+                    await sendDigitalProductCards(sender_psid, digitalProducts, pageId);
+                }
+            }
+        } else if (showDigitalProducts) {
+            console.log('AI triggered [SHOW_DIGITAL_PRODUCTS]');
+            const digitalProducts = await getDigitalProducts();
+            if (digitalProducts.length > 0) {
+                await sendDigitalProductCards(sender_psid, digitalProducts, pageId);
+            }
+        }
+
         if (showPaymentMethods) {
             console.log('AI triggered [SHOW_PAYMENT_METHODS]');
             const paymentMethods = await getPaymentMethods();
             if (paymentMethods.length > 0) {
                 await sendPaymentMethodCards(sender_psid, paymentMethods, pageId);
+            }
+        }
+
+        // Handle AI media attachment - send video/image/file to customer
+        if (mediaIdToSend) {
+            console.log('AI triggered [SEND_MEDIA] for:', mediaIdToSend);
+            try {
+                const media = await getMediaById(mediaIdToSend);
+                if (media && media.media_url) {
+                    // Send the media as a Messenger attachment
+                    const success = await sendMessengerAttachment(
+                        sender_psid,
+                        media.media_url,
+                        media.media_type as AttachmentType
+                    );
+
+                    if (success) {
+                        // Track usage for analytics
+                        await trackMediaUsage(mediaIdToSend);
+                        console.log(`✅ Media sent: ${media.title} (${media.media_type})`);
+
+                        // Track as activity
+                        await trackActivity(sender_psid, 'media_sent', mediaIdToSend, media.title, {
+                            media_type: media.media_type,
+                            category: media.category?.name || 'Uncategorized'
+                        });
+                    } else {
+                        console.error('Failed to send media attachment');
+                    }
+                } else {
+                    console.log('Media not found or no URL:', mediaIdToSend);
+                }
+            } catch (error) {
+                console.error('Error sending media:', error);
             }
         }
 

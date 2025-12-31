@@ -20,17 +20,28 @@ interface Category {
 
 export default function Home() {
   const [selectedDocText, setSelectedDocText] = useState('');
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'documents' | 'rules'>('documents');
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [isEditingDoc, setIsEditingDoc] = useState(false);
 
   const handleSaveDocument = async (text: string, categoryId?: string) => {
     try {
-      await fetch('/api/knowledge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, categoryId }),
-      });
+      if (selectedDocId) {
+        // Update existing document
+        await fetch('/api/knowledge', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: selectedDocId, text, categoryId }),
+        });
+      } else {
+        // Create new document
+        await fetch('/api/knowledge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, categoryId }),
+        });
+      }
       window.location.reload();
     } catch (error) {
       console.error('Failed to save document:', error);
@@ -39,10 +50,12 @@ export default function Home() {
 
   const handleCreateDocument = () => {
     setSelectedDocText('');
+    setSelectedDocId(null);
     setSelectedCategory(null);
     setActiveTab('documents');
     setIsEditingDoc(true);
   };
+
 
   // Determine which editor to show based on selected category
   const renderEditor = () => {
@@ -95,8 +108,9 @@ export default function Home() {
       <div className="flex-1 flex overflow-hidden">
         {/* Knowledge Base Sidebar */}
         <KnowledgeBase
-          onSelect={(text: string) => {
-            setSelectedDocText(text);
+          onSelect={(doc: { id: string; text: string }) => {
+            setSelectedDocId(doc.id);
+            setSelectedDocText(doc.text);
             setIsEditingDoc(true);
           }}
           onCategorySelect={(category: Category | null) => {

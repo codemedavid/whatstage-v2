@@ -2,7 +2,7 @@ import { getDashboardData, getEcommerceMetrics } from '../lib/dashboardData';
 import DashboardClient from './DashboardClient';
 
 export const dynamic = 'force-dynamic';
-export const revalidate = 60; // Revalidate every 60 seconds
+export const revalidate = 0; // Revalidate immediately
 
 export default async function Dashboard() {
   // Fetch all dashboard data server-side in parallel

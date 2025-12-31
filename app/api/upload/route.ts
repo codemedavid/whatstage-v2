@@ -1,57 +1,131 @@
 import { NextResponse } from 'next/server';
-import { v2 as cloudinary } from 'cloudinary';
+import { Readable } from 'stream';
+import {
+    getCloudinary,
+    getResourceType,
+    getMediaType,
+    validateFile,
+    FILE_SIZE_LIMITS,
+    logMediaOperation,
+} from '@/app/lib/mediaUtils';
 
-// Configure Cloudinary
-cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-    api_key: process.env.CLOUDINARY_API_KEY,
-    api_secret: process.env.CLOUDINARY_API_SECRET,
-});
+// Route segment config - increase timeout for video uploads
+export const maxDuration = 60; // 60 seconds max (Vercel Pro/hobby limit)
+export const dynamic = 'force-dynamic';
 
-// Determine resource type based on file mime type
-function getResourceType(mimeType: string): 'image' | 'video' | 'raw' {
-    if (mimeType.startsWith('image/')) return 'image';
-    if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) return 'video';
-    return 'raw'; // For documents, PDFs, etc.
-}
+/**
+ * Upload file to Cloudinary using streaming for large files
+ */
+async function uploadToCloudinary(
+    buffer: Buffer,
+    options: {
+        folder: string;
+        resourceType: 'image' | 'video' | 'raw';
+        mimeType: string;
+        useStreaming: boolean;
+    }
+): Promise<{
+    secure_url: string;
+    public_id: string;
+    eager?: Array<{ secure_url: string }>;
+}> {
+    const cloudinary = getCloudinary();
 
-// Determine attachment type for Messenger
-function getAttachmentType(mimeType: string): 'image' | 'video' | 'audio' | 'file' {
-    if (mimeType.startsWith('image/')) return 'image';
-    if (mimeType.startsWith('video/')) return 'video';
-    if (mimeType.startsWith('audio/')) return 'audio';
-    return 'file';
+    const uploadOptions = {
+        folder: options.folder,
+        resource_type: options.resourceType,
+        timeout: 120000, // 2 minute timeout
+        // For raw files, preserve the original filename
+        ...(options.resourceType === 'raw' && {
+            use_filename: true,
+            unique_filename: true,
+        }),
+        // For videos, add eager transformations for thumbnails
+        ...(options.resourceType === 'video' && {
+            eager: [
+                { format: 'jpg', transformation: [{ width: 400, height: 300, crop: 'fill' }] }
+            ],
+            eager_async: true,
+        }),
+    };
+
+    if (options.useStreaming) {
+        // Use streaming upload for large files to reduce memory pressure
+        return new Promise((resolve, reject) => {
+            const uploadStream = cloudinary.uploader.upload_stream(
+                uploadOptions,
+                (error, result) => {
+                    if (error) {
+                        reject(error);
+                    } else if (result) {
+                        resolve(result);
+                    } else {
+                        reject(new Error('No result from Cloudinary'));
+                    }
+                }
+            );
+
+            // Convert buffer to readable stream and pipe to upload
+            const readable = Readable.from(buffer);
+            readable.pipe(uploadStream);
+        });
+    } else {
+        // Use base64 upload for smaller files (simpler, faster)
+        const base64 = buffer.toString('base64');
+        const dataURI = `data:${options.mimeType};base64,${base64}`;
+        return cloudinary.uploader.upload(dataURI, uploadOptions);
+    }
 }
 
 export async function POST(req: Request) {
+    const startTime = Date.now();
+
     try {
         const formData = await req.formData();
         const file = formData.get('file') as File;
         const folder = (formData.get('folder') as string) || 'workflow-attachments';
 
-        if (!file) {
-            return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+        // Validate file
+        const validation = validateFile(file);
+        if (!validation.valid) {
+            return NextResponse.json(
+                { error: validation.error, code: validation.errorCode },
+                { status: 400 }
+            );
         }
 
         const mimeType = file.type || 'application/octet-stream';
         const resourceType = getResourceType(mimeType);
-        const attachmentType = getAttachmentType(mimeType);
+        const attachmentType = getMediaType(mimeType);
+        const fileSizeBytes = file.size;
+        const useStreaming = fileSizeBytes > FILE_SIZE_LIMITS.BASE64_MAX;
 
-        // Convert file to base64
+        logMediaOperation({
+            operation: 'upload_start',
+            fileSize: fileSizeBytes,
+        });
+
+        if (useStreaming) {
+            console.log('[Upload] Large file detected, using streaming upload...');
+        }
+
+        // Convert file to buffer
         const bytes = await file.arrayBuffer();
         const buffer = Buffer.from(bytes);
-        const base64 = buffer.toString('base64');
-        const dataURI = `data:${mimeType};base64,${base64}`;
 
-        // Upload to Cloudinary with appropriate resource type
-        const result = await cloudinary.uploader.upload(dataURI, {
-            folder: folder,
-            resource_type: resourceType,
-            // For raw files, preserve the original filename
-            ...(resourceType === 'raw' && {
-                use_filename: true,
-                unique_filename: true,
-            }),
+        // Upload to Cloudinary
+        const result = await uploadToCloudinary(buffer, {
+            folder,
+            resourceType,
+            mimeType,
+            useStreaming,
+        });
+
+        const duration = Date.now() - startTime;
+        logMediaOperation({
+            operation: 'upload_complete',
+            fileSize: fileSizeBytes,
+            duration,
         });
 
         return NextResponse.json({
@@ -62,11 +136,31 @@ export async function POST(req: Request) {
             attachment_type: attachmentType,
             file_name: file.name,
             mime_type: mimeType,
+            thumbnail_url: result.eager?.[0]?.secure_url || null,
         });
     } catch (error) {
-        console.error('Upload error:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        const errorCode = (error as { code?: string })?.code;
+
+        logMediaOperation({
+            operation: 'upload_error',
+            error: errorMessage,
+            duration: Date.now() - startTime,
+        });
+
+        // Provide more specific error messages
+        if (errorCode === 'ECONNRESET' || errorMessage.includes('aborted')) {
+            return NextResponse.json(
+                {
+                    error: 'Upload timed out. Try uploading a smaller file or check your connection.',
+                    code: 'TIMEOUT'
+                },
+                { status: 408 }
+            );
+        }
+
         return NextResponse.json(
-            { error: 'Failed to upload file' },
+            { error: 'Failed to upload file: ' + errorMessage, code: 'UPLOAD_FAILED' },
             { status: 500 }
         );
     }

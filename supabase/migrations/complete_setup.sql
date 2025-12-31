@@ -95,8 +95,12 @@ COMMENT ON COLUMN documents.expires_at IS 'Optional expiration date for time-sen
 CREATE TABLE IF NOT EXISTS document_folders (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   name TEXT NOT NULL,
+  category_id UUID,  -- FK added later after knowledge_categories exists
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Create index for category_id lookup
+CREATE INDEX IF NOT EXISTS idx_document_folders_category ON document_folders(category_id);
 
 -- Enable RLS
 ALTER TABLE document_folders ENABLE ROW LEVEL SECURITY;
@@ -151,6 +155,19 @@ BEGIN
   ) THEN
     ALTER TABLE documents 
       ADD CONSTRAINT documents_category_id_fkey 
+      FOREIGN KEY (category_id) REFERENCES knowledge_categories(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+
+-- Add foreign key from document_folders to knowledge_categories (deferred because of table creation order)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints 
+    WHERE constraint_name = 'document_folders_category_id_fkey'
+  ) THEN
+    ALTER TABLE document_folders 
+      ADD CONSTRAINT document_folders_category_id_fkey 
       FOREIGN KEY (category_id) REFERENCES knowledge_categories(id) ON DELETE SET NULL;
   END IF;
 END $$;
@@ -1506,3 +1523,22 @@ CREATE INDEX IF NOT EXISTS idx_leads_attention_priority ON leads(attention_prior
 -- Comment for documentation
 COMMENT ON COLUMN leads.attention_priority IS 'AI-assigned priority level: critical, high, medium, low';
 COMMENT ON COLUMN leads.priority_analyzed_at IS 'Timestamp when the priority was last updated by AI analysis';
+
+-- Add image_urls JSONB column to properties table
+-- This enables storing multiple images per property
+
+-- Add the new column for multiple images
+ALTER TABLE properties 
+ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;
+
+-- Migrate existing image_url values into the new image_urls array
+UPDATE properties 
+SET image_urls = jsonb_build_array(image_url)
+WHERE image_url IS NOT NULL 
+  AND (image_urls IS NULL OR image_urls = '[]'::jsonb);
+
+-- Create index for better query performance on JSONB
+CREATE INDEX IF NOT EXISTS idx_properties_image_urls ON properties USING GIN (image_urls);
+
+-- Add comment for documentation
+COMMENT ON COLUMN properties.image_urls IS 'Array of image URLs for property gallery. First image is used as primary/thumbnail.';

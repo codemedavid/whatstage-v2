@@ -294,11 +294,14 @@ export default function PropertiesPanel({ selectedNode, onClose, onUpdate, onDel
                             >
                                 <option value="stage_change">Pipeline Stage Changed</option>
                                 <option value="appointment_booked">Appointment Booked</option>
+                                <option value="digital_product_purchased">Digital Product Purchased</option>
                             </select>
                             <p className="text-xs text-gray-400 mt-1">
                                 {getValue('triggerType', 'stage_change') === 'appointment_booked'
                                     ? 'Workflow triggers when customer books an appointment'
-                                    : 'Workflow triggers when a lead enters the selected stage'}
+                                    : getValue('triggerType') === 'digital_product_purchased'
+                                        ? 'Workflow triggers when a digital product is purchased'
+                                        : 'Workflow triggers when a lead enters the selected stage'}
                             </p>
                         </div>
 
@@ -349,8 +352,21 @@ export default function PropertiesPanel({ selectedNode, onClose, onUpdate, onDel
                                 </p>
                             </div>
                         )}
+
+                        {getValue('triggerType') === 'digital_product_purchased' && (
+                            <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                                <p className="text-xs text-emerald-700 mb-2">
+                                    <strong>🛒 Digital Product Purchase</strong><br />
+                                    Workflow triggers when a customer completes a digital product purchase.
+                                </p>
+                                <p className="text-xs text-emerald-600">
+                                    <strong>💡 Tip:</strong> Use this for thank you messages, access instructions, or onboarding sequences.
+                                </p>
+                            </div>
+                        )}
                     </div>
                 )}
+
 
                 {selectedNode.data.type === 'wait' && (
                     <div className="space-y-3">

@@ -41,12 +41,12 @@ export async function PUT(
 
     try {
         const body = await request.json();
-        const { title, description, pipeline_stage_id, settings, fields } = body;
+        const { title, description, pipeline_stage_id, page_id, settings, fields } = body;
 
         // 1. Update Form Details
         const { error: formError } = await supabase
             .from('forms')
-            .update({ title, description, pipeline_stage_id, settings })
+            .update({ title, description, pipeline_stage_id, page_id, settings })
             .eq('id', id);
 
         if (formError) {
@@ -82,6 +82,7 @@ export async function PUT(
                 options: field.options,
                 placeholder: field.placeholder,
                 mapping_field: field.mapping_field,
+                step_number: field.step_number || 1,
                 display_order: index // Ensure order is saved based on array order
             }));
 

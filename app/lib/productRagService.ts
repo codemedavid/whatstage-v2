@@ -52,6 +52,17 @@ interface PaymentMethod {
     is_active: boolean;
 }
 
+interface DigitalProduct {
+    id: string;
+    title: string;
+    description: string | null;
+    short_description: string | null;
+    price: number | null;
+    is_active: boolean;
+    payment_type: 'one_time' | 'monthly' | null;
+    billing_interval_months: number | null;
+}
+
 /**
  * Fetch products with their variations and format as text context
  */
@@ -278,6 +289,62 @@ async function getPaymentMethodContext(): Promise<string> {
 }
 
 /**
+ * Fetch digital products and format as text context
+ */
+async function getDigitalProductContext(): Promise<string> {
+    try {
+        const { data: products, error } = await supabase
+            .from('digital_products')
+            .select('id, title, description, short_description, price, is_active, payment_type, billing_interval_months')
+            .eq('is_active', true)
+            .order('display_order', { ascending: true });
+
+        if (error || !products || products.length === 0) {
+            console.log('[ProductRAG] No digital products found');
+            return '';
+        }
+
+        let context = 'DIGITAL PRODUCT CATALOG:\n';
+        context += 'NOTE: Use [RECOMMEND_DIGITAL_PRODUCT:id] with the digital_product_id to show a specific digital product card.\n';
+
+        products.forEach((product: DigitalProduct, index: number) => {
+            let priceStr = product.price
+                ? `₱${product.price.toLocaleString('en-PH')}`
+                : 'Price on request';
+
+            // Add payment type indicator
+            if (product.payment_type === 'monthly') {
+                const interval = product.billing_interval_months || 1;
+                priceStr += interval === 1 ? '/month' : `/every ${interval} months`;
+            } else if (product.payment_type === 'one_time') {
+                priceStr += ' (one-time)';
+            }
+
+            context += `\n${index + 1}. ${product.title} - ${priceStr}`;
+            context += `\n   digital_product_id: ${product.id}`;  // Add ID for AI to use
+
+            if (product.short_description) {
+                context += `\n   Summary: ${product.short_description}`;
+            }
+
+            if (product.description) {
+                // Truncate long descriptions
+                const desc = product.description.length > 150
+                    ? product.description.substring(0, 150) + '...'
+                    : product.description;
+                context += `\n   About: ${desc}`;
+            }
+        });
+
+        console.log(`[ProductRAG] Built context for ${products.length} digital products`);
+        return context;
+    } catch (error) {
+        console.error('[ProductRAG] Error building digital product context:', error);
+        return '';
+    }
+}
+
+/**
  * Get combined catalog context for AI with caching
  * Includes products, properties, and payment methods
  */
@@ -293,10 +360,11 @@ export async function getCatalogContext(): Promise<string> {
     console.log('[ProductRAG] Building fresh catalog context...');
 
     // Fetch all contexts in parallel
-    const [productContext, propertyContext, paymentContext] = await Promise.all([
+    const [productContext, propertyContext, paymentContext, digitalProductContext] = await Promise.all([
         getProductContext(),
         getPropertyContext(),
         getPaymentMethodContext(),
+        getDigitalProductContext(),
     ]);
 
     // Combine contexts
@@ -308,6 +376,10 @@ export async function getCatalogContext(): Promise<string> {
 
     if (propertyContext) {
         parts.push(propertyContext);
+    }
+
+    if (digitalProductContext) {
+        parts.push(digitalProductContext);
     }
 
     if (paymentContext) {

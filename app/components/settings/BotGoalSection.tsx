@@ -12,6 +12,7 @@ const GOALS = [
     { id: 'appointment_booking', icon: '📅', title: 'Appointment Booking', desc: 'Schedule appointments and meetings' },
     { id: 'tripping', icon: '🏠', title: 'Tripping', desc: 'Schedule property site visits' },
     { id: 'purchase', icon: '💰', title: 'Purchase', desc: 'Drive direct sales and orders' },
+    { id: 'subscribe', icon: '📬', title: 'Subscribe', desc: 'Grow email list and newsletter subscribers' },
 ];
 
 export default function BotGoalSection({ onSave }: BotGoalSectionProps) {
@@ -115,8 +116,8 @@ export default function BotGoalSection({ onSave }: BotGoalSectionProps) {
                         key={goal.id}
                         onClick={() => handleGoalChange(goal.id)}
                         className={`p-5 rounded-2xl border-2 cursor-pointer transition-all duration-200 flex items-start gap-4 ${selectedGoal === goal.id
-                                ? 'border-emerald-500 bg-emerald-50 shadow-sm'
-                                : 'border-gray-100 bg-white hover:border-emerald-200 hover:bg-gray-50'
+                            ? 'border-emerald-500 bg-emerald-50 shadow-sm'
+                            : 'border-gray-100 bg-white hover:border-emerald-200 hover:bg-gray-50'
                             }`}
                     >
                         <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-2xl shrink-0 ${selectedGoal === goal.id ? 'bg-emerald-100' : 'bg-gray-100'

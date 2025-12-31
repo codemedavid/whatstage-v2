@@ -18,7 +18,10 @@ import {
     MapPin,
     BedDouble,
     Bath,
-    Maximize
+    Maximize,
+    BookOpen,
+    Film,
+    ExternalLink
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -27,6 +30,7 @@ const ProductFormModal = lazy(() => import('./ProductFormModal'));
 const CategoryFormModal = lazy(() => import('./CategoryFormModal'));
 const PropertyFormModal = lazy(() => import('./PropertyFormModal'));
 const ConfirmModal = lazy(() => import('./ConfirmModal'));
+const DigitalProductFormModal = lazy(() => import('./DigitalProductFormModal'));
 
 interface ProductCategory {
     id: string;
@@ -71,10 +75,39 @@ interface Property {
     payment_terms: string | null;
 }
 
+interface DigitalProductMedia {
+    id?: string;
+    media_type: 'image' | 'video';
+    media_url: string;
+    thumbnail_url?: string | null;
+}
+
+interface DigitalProduct {
+    id: string;
+    title: string;
+    description: string | null;
+    short_description: string | null;
+    price: number | null;
+    currency: string;
+    category_id: string | null;
+    category: ProductCategory | null;
+    checkout_form_id: string | null;
+    checkout_form: { id: string; title: string } | null;
+    is_active: boolean;
+    access_type: string;
+    access_duration_days: number | null;
+    payment_type: 'one_time' | 'recurring';
+    billing_interval: 'monthly' | 'yearly';
+    thumbnail_url: string | null;
+    creator_name: string | null;
+    media: DigitalProductMedia[];
+}
+
 export default function StorePage() {
     const router = useRouter();
     const [loading, setLoading] = useState(true);
-    const [storeType, setStoreType] = useState<'ecommerce' | 'real_estate' | null>(null);
+    const [storeType, setStoreType] = useState<'ecommerce' | 'real_estate' | 'digital_product' | null>(null);
+    const [activeTab, setActiveTab] = useState<'products' | 'digital'>('products');
 
     // E-commerce state
     const [products, setProducts] = useState<Product[]>([]);
@@ -97,6 +130,11 @@ export default function StorePage() {
     const [isEditingProperty, setIsEditingProperty] = useState(false);
     const [editingProperty, setEditingProperty] = useState<Property | null>(null);
     const [propertyFormData, setPropertyFormData] = useState<any>({});
+
+    // Digital Products state
+    const [digitalProducts, setDigitalProducts] = useState<DigitalProduct[]>([]);
+    const [isEditingDigitalProduct, setIsEditingDigitalProduct] = useState(false);
+    const [editingDigitalProduct, setEditingDigitalProduct] = useState<DigitalProduct | null>(null);
 
     // Joint state
     const [uploading, setUploading] = useState(false);
@@ -125,7 +163,11 @@ export default function StorePage() {
             setStoreType(settings.store_type);
 
             if (settings.store_type === 'ecommerce') {
-                await Promise.all([fetchProducts(), fetchCategories()]);
+                await Promise.all([fetchProducts(), fetchCategories(), fetchDigitalProducts()]);
+            } else if (settings.store_type === 'digital_product') {
+                // Digital Product only mode - default to digital tab and only fetch digital products
+                setActiveTab('digital');
+                await Promise.all([fetchCategories(), fetchDigitalProducts()]);
             } else if (settings.store_type === 'real_estate') {
                 await fetchProperties();
             }
@@ -303,6 +345,82 @@ export default function StorePage() {
         });
     };
 
+    // --- DIGITAL PRODUCTS FUNCTIONS ---
+
+    const fetchDigitalProducts = async () => {
+        try {
+            const res = await fetch('/api/digital-products');
+            const data = await res.json();
+            setDigitalProducts(Array.isArray(data) ? data : []);
+        } catch (error) {
+            console.error('Failed to fetch digital products:', error);
+            setDigitalProducts([]);
+        }
+    };
+
+    const handleEditDigitalProduct = (product: DigitalProduct) => {
+        setEditingDigitalProduct(product);
+        setIsEditingDigitalProduct(true);
+    };
+
+    const handleSaveDigitalProduct = async (productData: Partial<DigitalProduct> & { media?: DigitalProductMedia[] }) => {
+        try {
+            const isEditing = !!productData.id;
+            const res = await fetch(isEditing ? `/api/digital-products/${productData.id}` : '/api/digital-products', {
+                method: isEditing ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(productData),
+            });
+
+            if (res.ok) {
+                await fetchDigitalProducts();
+                setEditingDigitalProduct(null);
+                setIsEditingDigitalProduct(false);
+            } else {
+                throw new Error('Failed to save');
+            }
+        } catch (error) {
+            console.error('Failed to save digital product:', error);
+            throw error;
+        }
+    };
+
+    const handleToggleDigitalProductActive = async (product: DigitalProduct) => {
+        try {
+            await fetch(`/api/digital-products/${product.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ is_active: !product.is_active }),
+            });
+            await fetchDigitalProducts();
+        } catch (error) {
+            console.error('Failed to toggle digital product:', error);
+        }
+    };
+
+    const handleDeleteDigitalProduct = (id: string, title: string) => {
+        setConfirmModal({
+            isOpen: true,
+            title: 'Delete Digital Product',
+            message: `Are you sure you want to delete "${title}"? This action cannot be undone.`,
+            onConfirm: async () => {
+                try {
+                    await fetch(`/api/digital-products/${id}`, { method: 'DELETE' });
+                    await fetchDigitalProducts();
+                } catch (error) {
+                    console.error('Failed to delete digital product:', error);
+                }
+                setConfirmModal(prev => ({ ...prev, isOpen: false }));
+            },
+        });
+    };
+
+    // Filtered Digital Products
+    const filteredDigitalProducts = digitalProducts.filter(product =>
+        product.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        product.description?.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
     // --- REAL ESTATE FUNCTIONS ---
 
     const fetchProperties = async () => {
@@ -413,8 +531,8 @@ export default function StorePage() {
 
         setUploading(true);
         try {
-            if (storeType === 'ecommerce') {
-                // E-commerce: single image upload
+            if (storeType === 'ecommerce' || storeType === 'digital_product') {
+                // E-commerce/Digital Product: single image upload
                 const file = files[0];
                 const formData = new FormData();
                 formData.append('file', file);
@@ -491,22 +609,34 @@ export default function StorePage() {
                         </p>
                     </div>
                     <div className="flex items-center gap-3">
-                        {storeType === 'ecommerce' ? (
+                        {(storeType === 'ecommerce' || storeType === 'digital_product') ? (
                             <>
-                                <button
-                                    onClick={() => setShowCategoryForm(true)}
-                                    className="flex items-center gap-2 px-5 py-2.5 bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all font-medium text-sm shadow-sm"
-                                >
-                                    <FolderPlus size={18} />
-                                    Add Category
-                                </button>
-                                <button
-                                    onClick={() => setIsEditingProduct(true)}
-                                    className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 text-white rounded-full hover:from-teal-600 hover:to-emerald-600 transition-all font-medium text-sm shadow-lg shadow-teal-500/25"
-                                >
-                                    <Plus size={18} />
-                                    Add Product
-                                </button>
+                                {activeTab === 'products' ? (
+                                    <>
+                                        <button
+                                            onClick={() => setShowCategoryForm(true)}
+                                            className="flex items-center gap-2 px-5 py-2.5 bg-white text-gray-700 rounded-full border border-gray-200 hover:bg-gray-50 hover:border-gray-300 transition-all font-medium text-sm shadow-sm"
+                                        >
+                                            <FolderPlus size={18} />
+                                            Add Category
+                                        </button>
+                                        <button
+                                            onClick={() => setIsEditingProduct(true)}
+                                            className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 text-white rounded-full hover:from-teal-600 hover:to-emerald-600 transition-all font-medium text-sm shadow-lg shadow-teal-500/25"
+                                        >
+                                            <Plus size={18} />
+                                            Add Product
+                                        </button>
+                                    </>
+                                ) : (
+                                    <button
+                                        onClick={() => setIsEditingDigitalProduct(true)}
+                                        className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-full hover:from-emerald-600 hover:to-teal-600 transition-all font-medium text-sm shadow-lg shadow-emerald-500/25"
+                                    >
+                                        <Plus size={18} />
+                                        Add Digital Product
+                                    </button>
+                                )}
                             </>
                         ) : (
                             <button
@@ -520,6 +650,32 @@ export default function StorePage() {
                     </div>
                 </div>
 
+                {/* Tab Navigation - E-commerce only */}
+                {(storeType === 'ecommerce' || storeType === 'digital_product') && (
+                    <div className="flex items-center gap-2 mb-6">
+                        <button
+                            onClick={() => setActiveTab('products')}
+                            className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-medium transition-all ${activeTab === 'products' ? 'bg-gray-900 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}
+                        >
+                            <Package size={18} />
+                            Products
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${activeTab === 'products' ? 'bg-white/20' : 'bg-gray-100'}`}>
+                                {products.length}
+                            </span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('digital')}
+                            className={`flex items-center gap-2 px-5 py-2.5 rounded-full font-medium transition-all ${activeTab === 'digital' ? 'bg-gray-900 text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}
+                        >
+                            <BookOpen size={18} />
+                            Digital Products
+                            <span className={`text-xs px-2 py-0.5 rounded-full ${activeTab === 'digital' ? 'bg-white/20' : 'bg-gray-100'}`}>
+                                {digitalProducts.length}
+                            </span>
+                        </button>
+                    </div>
+                )}
+
                 {/* Search Bar - Shared */}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 mb-8">
                     <div className="relative flex-1">
@@ -532,7 +688,7 @@ export default function StorePage() {
                             className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500 transition-all text-gray-900 placeholder-gray-400"
                         />
                     </div>
-                    {storeType === 'ecommerce' && (
+                    {(storeType === 'ecommerce' || storeType === 'digital_product') && (
                         <div className="flex items-center gap-2 flex-wrap">
                             <button
                                 onClick={() => setSelectedCategoryFilter(null)}
@@ -563,42 +719,135 @@ export default function StorePage() {
                 </div>
 
                 {/* CONTENT AREA */}
-                {storeType === 'ecommerce' ? (
-                    // E-COMMERCE GRID
-                    filteredProducts.length === 0 ? (
-                        <div className="text-center py-20 px-4 bg-white rounded-[32px] border border-dashed border-gray-200">
-                            <div className="bg-gradient-to-br from-teal-50 to-emerald-50 p-6 rounded-full w-24 h-24 flex items-center justify-center mx-auto mb-6">
-                                <Package size={40} className="text-teal-500" />
+                {(storeType === 'ecommerce' || storeType === 'digital_product') ? (
+                    // E-COMMERCE VIEW (Products or Digital Products based on tab)
+                    activeTab === 'products' ? (
+                        // PRODUCTS GRID
+                        filteredProducts.length === 0 ? (
+                            <div className="text-center py-20 px-4 bg-white rounded-[32px] border border-dashed border-gray-200">
+                                <div className="bg-gradient-to-br from-teal-50 to-emerald-50 p-6 rounded-full w-24 h-24 flex items-center justify-center mx-auto mb-6">
+                                    <Package size={40} className="text-teal-500" />
+                                </div>
+                                <h3 className="text-gray-900 font-semibold text-xl mb-2">No products yet</h3>
+                                <button onClick={() => setIsEditingProduct(true)} className="mt-4 px-6 py-2 bg-teal-500 text-white rounded-full">Add Product</button>
                             </div>
-                            <h3 className="text-gray-900 font-semibold text-xl mb-2">No products yet</h3>
-                            <button onClick={() => setIsEditingProduct(true)} className="mt-4 px-6 py-2 bg-teal-500 text-white rounded-full">Add Product</button>
-                        </div>
-                    ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                            {filteredProducts.map((product) => (
-                                <div key={product.id} className={`group bg-white rounded-3xl overflow-hidden border border-gray-100 hover:shadow-xl hover:shadow-gray-200/50 transition-all duration-300 ${!product.is_active ? 'opacity-60' : ''}`}>
-                                    <Link href={`/product/${product.id}`}>
-                                        <div className="relative aspect-square bg-gray-100 overflow-hidden">
-                                            {product.image_url ? <img src={product.image_url} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" /> : <div className="w-full h-full flex items-center justify-center"><Package className="text-gray-300" /></div>}
-                                            {product.category && <div className="absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-medium text-white backdrop-blur-sm" style={{ backgroundColor: `${product.category.color}CC` }}>{product.category.name}</div>}
-                                            {!product.is_active && <div className="absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-medium bg-gray-900/80 text-white backdrop-blur-sm">Inactive</div>}
-                                        </div>
-                                    </Link>
-                                    <div className="p-5">
-                                        <h3 className="font-semibold text-gray-900 text-lg mb-1 truncate">{product.name}</h3>
-                                        <p className="text-gray-500 text-sm line-clamp-2 mb-3">{product.description}</p>
-                                        <div className="text-xl font-bold text-teal-600">{formatPrice(product.price)}</div>
-                                        <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
-                                            <button onClick={() => handleToggleProductActive(product)} className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">{product.is_active ? <ToggleRight className="text-teal-500" /> : <ToggleLeft />} {product.is_active ? 'Active' : 'Inactive'}</button>
-                                            <div className="flex gap-1">
-                                                <button onClick={() => handleEditProduct(product)} className="p-2 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg"><Edit2 size={18} /></button>
-                                                <button onClick={() => handleDeleteProduct(product.id, product.name)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+                        ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                                {filteredProducts.map((product) => (
+                                    <div key={product.id} className={`group bg-white rounded-3xl overflow-hidden border border-gray-100 hover:shadow-xl hover:shadow-gray-200/50 transition-all duration-300 ${!product.is_active ? 'opacity-60' : ''}`}>
+                                        <Link href={`/product/${product.id}`}>
+                                            <div className="relative aspect-square bg-gray-100 overflow-hidden">
+                                                {product.image_url ? <img src={product.image_url} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" /> : <div className="w-full h-full flex items-center justify-center"><Package className="text-gray-300" /></div>}
+                                                {product.category && <div className="absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-medium text-white backdrop-blur-sm" style={{ backgroundColor: `${product.category.color}CC` }}>{product.category.name}</div>}
+                                                {!product.is_active && <div className="absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-medium bg-gray-900/80 text-white backdrop-blur-sm">Inactive</div>}
+                                            </div>
+                                        </Link>
+                                        <div className="p-5">
+                                            <h3 className="font-semibold text-gray-900 text-lg mb-1 truncate">{product.name}</h3>
+                                            <p className="text-gray-500 text-sm line-clamp-2 mb-3">{product.description}</p>
+                                            <div className="text-xl font-bold text-teal-600">{formatPrice(product.price)}</div>
+                                            <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
+                                                <button onClick={() => handleToggleProductActive(product)} className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">{product.is_active ? <ToggleRight className="text-teal-500" /> : <ToggleLeft />} {product.is_active ? 'Active' : 'Inactive'}</button>
+                                                <div className="flex gap-1">
+                                                    <button onClick={() => handleEditProduct(product)} className="p-2 text-gray-400 hover:text-teal-600 hover:bg-teal-50 rounded-lg"><Edit2 size={18} /></button>
+                                                    <button onClick={() => handleDeleteProduct(product.id, product.name)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
+                                ))}
+                            </div>
+                        )
+                    ) : (
+                        // DIGITAL PRODUCTS GRID
+                        filteredDigitalProducts.length === 0 ? (
+                            <div className="text-center py-20 px-4 bg-white rounded-[32px] border border-dashed border-gray-200">
+                                <div className="bg-gradient-to-br from-teal-50 to-emerald-50 p-6 rounded-full w-24 h-24 flex items-center justify-center mx-auto mb-6">
+                                    <BookOpen size={40} className="text-emerald-500" />
                                 </div>
-                            ))}
-                        </div>
+                                <h3 className="text-gray-900 font-semibold text-xl mb-2">No digital products yet</h3>
+                                <p className="text-gray-500 mb-4">Sell courses, ebooks, and digital content</p>
+                                <button onClick={() => setIsEditingDigitalProduct(true)} className="mt-4 px-6 py-2 bg-emerald-500 text-white rounded-full">Add Digital Product</button>
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {filteredDigitalProducts.map((product) => (
+                                    <div key={product.id} className={`group bg-white rounded-3xl overflow-hidden border border-gray-100 hover:shadow-xl hover:shadow-gray-200/50 transition-all duration-300 ${!product.is_active ? 'opacity-60' : ''}`}>
+                                        {/* Media Preview */}
+                                        <div className="relative aspect-video bg-gradient-to-br from-teal-100 to-emerald-100 overflow-hidden">
+                                            {product.media && product.media.length > 0 ? (
+                                                <>
+                                                    <img
+                                                        src={product.media[0].thumbnail_url || product.media[0].media_url}
+                                                        alt={product.title}
+                                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                                    />
+                                                    {product.media[0].media_type === 'video' && (
+                                                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                                                            <div className="w-12 h-12 bg-white/90 rounded-full flex items-center justify-center">
+                                                                <Film size={24} className="text-emerald-600 ml-0.5" />
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {product.media.length > 1 && (
+                                                        <div className="absolute bottom-2 right-2 px-2 py-1 bg-black/50 rounded-full text-xs text-white">
+                                                            +{product.media.length - 1} more
+                                                        </div>
+                                                    )}
+                                                </>
+                                            ) : (
+                                                <div className="w-full h-full flex items-center justify-center">
+                                                    <BookOpen size={40} className="text-emerald-300" />
+                                                </div>
+                                            )}
+                                            {product.category && (
+                                                <div className="absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-medium text-white backdrop-blur-sm" style={{ backgroundColor: `${product.category.color}CC` }}>
+                                                    {product.category.name}
+                                                </div>
+                                            )}
+                                            {!product.is_active && (
+                                                <div className="absolute top-4 right-4 px-3 py-1 rounded-full text-xs font-medium bg-gray-900/80 text-white backdrop-blur-sm">Inactive</div>
+                                            )}
+                                        </div>
+                                        {/* Content */}
+                                        <div className="p-5">
+                                            <h3 className="font-semibold text-gray-900 text-lg mb-1 truncate">{product.title}</h3>
+                                            <p className="text-gray-500 text-sm line-clamp-2 mb-3">{product.short_description || product.description}</p>
+                                            <div className="flex items-center justify-between mb-3">
+                                                <div className="text-xl font-bold text-emerald-600">
+                                                    {product.price ? formatPrice(product.price) : 'Free'}
+                                                </div>
+                                                {product.checkout_form && (
+                                                    <span className="text-xs text-gray-400 flex items-center gap-1">
+                                                        Form: {product.checkout_form.title}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center justify-between pt-4 border-t border-gray-100">
+                                                <div className="flex items-center gap-2">
+                                                    <button onClick={() => handleToggleDigitalProductActive(product)} className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                                                        {product.is_active ? <ToggleRight className="text-emerald-500" /> : <ToggleLeft />}
+                                                        {product.is_active ? 'Active' : 'Inactive'}
+                                                    </button>
+                                                </div>
+                                                <div className="flex gap-1">
+                                                    <Link
+                                                        href={`/digital/${product.id}`}
+                                                        target="_blank"
+                                                        className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg"
+                                                        title="View public page"
+                                                    >
+                                                        <ExternalLink size={18} />
+                                                    </Link>
+                                                    <button onClick={() => handleEditDigitalProduct(product)} className="p-2 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg"><Edit2 size={18} /></button>
+                                                    <button onClick={() => handleDeleteDigitalProduct(product.id, product.title)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18} /></button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )
                     )
                 ) : (
                     // REAL ESTATE GRID
@@ -684,7 +933,7 @@ export default function StorePage() {
 
             {/* Modals */}
             <Suspense fallback={<div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50"><Loader2 className="animate-spin text-white" size={32} /></div>}>
-                {storeType === 'ecommerce' && (
+                {(storeType === 'ecommerce' || storeType === 'digital_product') && (
                     <>
                         <ProductFormModal
                             isOpen={isEditingProduct}
@@ -715,6 +964,16 @@ export default function StorePage() {
                             setCategoryColor={setNewCategoryColor}
                             onSave={handleAddCategory}
                             onClose={() => setShowCategoryForm(false)}
+                        />
+                        <DigitalProductFormModal
+                            isOpen={isEditingDigitalProduct}
+                            editingProduct={editingDigitalProduct}
+                            categories={categories}
+                            onSave={handleSaveDigitalProduct}
+                            onClose={() => {
+                                setIsEditingDigitalProduct(false);
+                                setEditingDigitalProduct(null);
+                            }}
                         />
                     </>
                 )}

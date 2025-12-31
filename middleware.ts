@@ -12,8 +12,10 @@ export const config = {
          * - _next/static (static files)
          * - _next/image (image optimization files)
          * - favicon.ico (favicon file)
+         * - api/upload (file upload route - avoid body parsing issues)
+         * - api/media (media upload route - avoid body parsing issues)
          * - Feel free to modify this pattern to include more paths.
          */
-        '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+        '/((?!_next/static|_next/image|favicon.ico|api/upload|api/media|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
     ],
 };

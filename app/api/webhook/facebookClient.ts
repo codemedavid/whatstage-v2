@@ -1,5 +1,5 @@
 import { getPageToken } from './config';
-import type { PaymentMethod, Product, Property } from './data';
+import type { DigitalProduct, PaymentMethod, Product, Property } from './data';
 import { withRetry, isTransientError } from '@/app/lib/retryHelper';
 
 const DEFAULT_APP_URL = process.env.NEXT_PUBLIC_BASE_URL || process.env.NEXT_PUBLIC_APP_URL || 'https://aphelion-photon.vercel.app';
@@ -377,6 +377,121 @@ export async function sendPropertyCards(sender_psid: string, properties: Propert
         return true;
     } catch (error) {
         console.error('Error sending property cards after retries:', error);
+        return false;
+    }
+}
+
+// Send digital products as Facebook Generic Template cards
+export async function sendDigitalProductCards(sender_psid: string, products: DigitalProduct[], pageId?: string) {
+    const PAGE_ACCESS_TOKEN = await getPageToken(pageId);
+    if (!PAGE_ACCESS_TOKEN || products.length === 0) return false;
+
+    // Build elements for Generic Template (max 10)
+    const elements = products.slice(0, 10).map(product => {
+        const priceFormatted = product.price
+            ? `₱${product.price.toLocaleString('en-PH', { minimumFractionDigits: 2 })}`
+            : 'Price upon request';
+
+        // Add payment type indicator
+        let paymentTypeText = '';
+        if (product.payment_type === 'monthly') {
+            const interval = product.billing_interval_months || 1;
+            paymentTypeText = interval === 1 ? '/month' : `/every ${interval} months`;
+        } else if (product.payment_type === 'one_time') {
+            paymentTypeText = ' (one-time)';
+        }
+
+        // Build subtitle: price + short description
+        let subtitle = `${priceFormatted}${paymentTypeText}`;
+        if (product.short_description) {
+            const desc = product.short_description.length > 40
+                ? product.short_description.substring(0, 37) + '...'
+                : product.short_description;
+            subtitle += ` • ${desc}`;
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const element: any = {
+            title: product.title,
+            subtitle: subtitle,
+        };
+
+        // Add thumbnail image if available
+        if (product.thumbnail_url) {
+            element.image_url = product.thumbnail_url;
+        }
+
+        // Build digital product URL with PSID and user_id for tracking
+        let productUrl = `${DEFAULT_APP_URL}/digital/${product.id}?psid=${encodeURIComponent(sender_psid)}&user_id=${encodeURIComponent(sender_psid)}`;
+        if (pageId) {
+            productUrl += `&pageId=${encodeURIComponent(pageId)}`;
+        }
+
+        // Add buttons
+        element.buttons = [
+            {
+                type: 'web_url',
+                url: productUrl,
+                title: 'View Details',
+                webview_height_ratio: 'tall'
+            },
+            {
+                type: 'postback',
+                title: '🚀 Get Access',
+                payload: `GET_DIGITAL_ACCESS_${product.id}`
+            }
+        ];
+
+        return element;
+    });
+
+    const requestBody = {
+        messaging_type: 'RESPONSE',
+        recipient: { id: sender_psid },
+        message: {
+            attachment: {
+                type: 'template',
+                payload: {
+                    template_type: 'generic',
+                    elements: elements
+                }
+            }
+        }
+    };
+
+    console.log('Sending digital product cards:', JSON.stringify(requestBody, null, 2));
+
+    try {
+        await withRetry(async () => {
+            const res = await fetch(
+                `https://graph.facebook.com/v21.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody),
+                }
+            );
+
+            const resData = await res.json();
+            if (!res.ok) {
+                if (res.status >= 500 || res.status === 429) {
+                    throw new Error(`Facebook API Error ${res.status}: ${JSON.stringify(resData)}`);
+                }
+                console.error('Failed to send digital product cards (Non-retryable):', resData);
+                throw new Error('Non-retryable Facebook API Error');
+            }
+            return resData;
+        }, {
+            maxAttempts: 2,
+            initialDelayMs: 500,
+            backoffMultiplier: 2,
+            shouldRetry: isTransientError
+        });
+
+        console.log('Digital product cards sent successfully');
+        return true;
+    } catch (error) {
+        console.error('Error sending digital product cards after retries:', error);
         return false;
     }
 }

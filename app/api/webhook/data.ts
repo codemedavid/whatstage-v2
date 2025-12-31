@@ -151,3 +151,90 @@ export async function getPropertyById(propertyId: string): Promise<Property | nu
         return null;
     }
 }
+
+// Digital Product type
+export interface DigitalProduct {
+    id: string;
+    title: string;
+    description: string | null;
+    short_description: string | null;
+    price: number | null;
+    thumbnail_url: string | null;
+    is_active: boolean;
+    payment_type: 'one_time' | 'monthly' | null;
+    billing_interval_months: number | null;
+}
+
+// Fetch active digital products from database
+export async function getDigitalProducts(): Promise<DigitalProduct[]> {
+    try {
+        const { data, error } = await supabase
+            .from('digital_products')
+            .select(`
+                id,
+                title,
+                description,
+                short_description,
+                price,
+                thumbnail_url,
+                is_active,
+                payment_type,
+                billing_interval_months,
+                media:digital_product_media(media_url, thumbnail_url)
+            `)
+            .eq('is_active', true)
+            .order('display_order', { ascending: true })
+            .limit(10); // Limit to 10 for carousel
+
+        if (error || !data) {
+            console.log('No digital products found or error:', error);
+            return [];
+        }
+
+        // Use dedicated thumbnail_url from digital_products, fallback to first media item
+        return data.map(product => ({
+            ...product,
+            thumbnail_url: product.thumbnail_url || product.media?.[0]?.thumbnail_url || product.media?.[0]?.media_url || null,
+        }));
+    } catch (error) {
+        console.error('Error fetching digital products:', error);
+        return [];
+    }
+}
+
+// Fetch a single digital product by ID
+export async function getDigitalProductById(productId: string): Promise<DigitalProduct | null> {
+    try {
+        const { data: product, error } = await supabase
+            .from('digital_products')
+            .select(`
+                id,
+                title,
+                description,
+                short_description,
+                price,
+                thumbnail_url,
+                is_active,
+                payment_type,
+                billing_interval_months,
+                media:digital_product_media(media_url, thumbnail_url)
+            `)
+            .eq('id', productId)
+            .single();
+
+        if (error || !product) {
+            console.log('Digital product not found:', productId, error);
+            return null;
+        }
+
+        // Use dedicated thumbnail_url from digital_products, fallback to first media item
+        return {
+            ...product,
+            thumbnail_url: product.thumbnail_url || product.media?.[0]?.thumbnail_url || product.media?.[0]?.media_url || null,
+        };
+    } catch (error) {
+        console.error('Error fetching digital product by ID:', error);
+        return null;
+    }
+}
+

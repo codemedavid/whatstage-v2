@@ -6,10 +6,10 @@ export interface DashboardMetrics {
     store: {
         isSetup: boolean;
         name: string | null;
-        type: 'ecommerce' | 'real_estate' | null;
+        type: 'ecommerce' | 'real_estate' | 'digital_product' | null;
     };
     goal: {
-        type: 'lead_generation' | 'appointment_booking' | 'tripping' | 'purchase';
+        type: 'lead_generation' | 'appointment_booking' | 'tripping' | 'purchase' | 'subscribe';
         reached: number;
         total: number;
         percentage: number;
@@ -78,6 +78,45 @@ export interface EcommerceMetrics {
     topProducts: TopProduct[];
 }
 
+// Real Estate specific types
+export interface LeadInsight {
+    reason: string;
+    count: number;
+    description: string;
+}
+
+export interface Viewing {
+    id: string;
+    propertyTitle: string;
+    leadName: string;
+    time: string;
+    status: 'scheduled' | 'completed' | 'cancelled' | 'pending';
+}
+
+export interface RealEstateMetrics {
+    leads: {
+        today: number;
+        week: number;
+        month: number;
+        growth: number;
+    };
+    activeListings: number;
+    propertiesUnderContract: number;
+    viewings: {
+        scheduled: number;
+        pending: number;
+        upcoming: Viewing[];
+    };
+    closureInsights: LeadInsight[];
+    pipeline: {
+        new: number;
+        contacted: number;
+        viewing: number;
+        negotiating: number;
+        closed: number;
+    };
+}
+
 // Business Overview metrics (for OverviewCards component)
 export interface OverviewMetrics {
     dailyLeads: {
@@ -123,7 +162,7 @@ async function fetchMetricsUncached(): Promise<DashboardMetrics | null> {
             .single();
 
         const goalType = (botSettings?.primary_goal || 'lead_generation') as
-            'lead_generation' | 'appointment_booking' | 'tripping' | 'purchase';
+            'lead_generation' | 'appointment_booking' | 'tripping' | 'purchase' | 'subscribe';
 
         // 2b. Get valid stages to filter phantom leads
         const { data: validStages } = await supabase
@@ -541,6 +580,7 @@ async function fetchEcommerceMetricsUncached(abandonmentHours: number = 24): Pro
         });
 
         const cartAbandonmentLeads: CartAbandonmentLead[] = (abandonedOrders || []).map(order => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const lead = order.leads as any;
             const createdAt = new Date(order.created_at);
             const ageHours = Math.round((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60));
@@ -587,6 +627,7 @@ async function fetchEcommerceMetricsUncached(abandonmentHours: number = 24): Pro
             const productMap: Record<string, { name: string; imageUrl?: string; orderCount: number; revenue: number }> = {};
             orderItems?.forEach(item => {
                 const productId = item.product_id || item.product_name;
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const product = item.products as any;
                 if (!productMap[productId]) {
                     productMap[productId] = {
@@ -644,3 +685,207 @@ export const getEcommerceMetrics = (abandonmentHours?: number) =>
         [`ecommerce-metrics-${abandonmentHours || 24}`],
         { revalidate: 30, tags: ['dashboard', 'ecommerce'] }
     )();
+
+// ============================================================================
+// REAL ESTATE DASHBOARD METRICS
+// ============================================================================
+
+async function fetchRealEstateMetricsUncached(): Promise<RealEstateMetrics> {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekStart = new Date(todayStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastWeekStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    try {
+        // 1. Lead counts (today, this week, this month)
+        const { count: leadsToday } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .gte('created_at', todayStart.toISOString());
+
+        const { count: leadsThisWeek } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .gte('created_at', weekStart.toISOString());
+
+        const { count: leadsThisMonth } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .gte('created_at', monthStart.toISOString());
+
+        const { count: leadsLastWeek } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .gte('created_at', lastWeekStart.toISOString())
+            .lt('created_at', weekStart.toISOString());
+
+        // Calculate growth percentage
+        const thisWeekCount = leadsThisWeek || 0;
+        const lastWeekCount = leadsLastWeek || 0;
+        const growth = lastWeekCount > 0
+            ? Math.round(((thisWeekCount - lastWeekCount) / lastWeekCount) * 100)
+            : (thisWeekCount > 0 ? 100 : 0);
+
+        // 2. Active Listings
+        const { count: activeListings } = await supabase
+            .from('properties')
+            .select('*', { count: 'exact', head: true })
+            .eq('is_active', true)
+            .in('status', ['for_sale', 'for_rent']);
+
+        // 3. Properties Under Contract (sold/rented but still active for tracking)
+        const { count: underContract } = await supabase
+            .from('properties')
+            .select('*', { count: 'exact', head: true })
+            .in('status', ['sold', 'rented']);
+
+        // 4. Viewings/Appointments - scheduled and pending
+        const tomorrow = new Date(todayStart.getTime() + 2 * 24 * 60 * 60 * 1000);
+
+        const { count: scheduledViewings } = await supabase
+            .from('appointments')
+            .select('*', { count: 'exact', head: true })
+            .in('status', ['confirmed', 'pending'])
+            .gte('appointment_date', todayStart.toISOString().split('T')[0]);
+
+        const { count: pendingViewings } = await supabase
+            .from('appointments')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'pending')
+            .gte('appointment_date', todayStart.toISOString().split('T')[0]);
+
+        // Get upcoming viewings for display
+        const { data: upcomingAppointments } = await supabase
+            .from('appointments')
+            .select('id, customer_name, appointment_date, start_time, status, properties(title)')
+            .in('status', ['confirmed', 'pending'])
+            .gte('appointment_date', todayStart.toISOString().split('T')[0])
+            .lte('appointment_date', tomorrow.toISOString().split('T')[0])
+            .order('appointment_date', { ascending: true })
+            .order('start_time', { ascending: true })
+            .limit(5);
+
+        const upcomingViewings: Viewing[] = (upcomingAppointments || []).map(apt => {
+            const dateStr = apt.appointment_date;
+            const isToday = dateStr === todayStart.toISOString().split('T')[0];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const property = apt.properties as any;
+            return {
+                id: apt.id,
+                propertyTitle: property?.title || 'Property Viewing',
+                leadName: apt.customer_name || 'Unknown',
+                time: `${isToday ? 'Today' : 'Tomorrow'}, ${apt.start_time?.slice(0, 5) || ''}`,
+                status: apt.status as Viewing['status']
+            };
+        });
+
+        // 5. Pipeline stages breakdown
+        const { data: stages } = await supabase
+            .from('pipeline_stages')
+            .select('id, name, display_order');
+
+        const stageMap: Record<string, string> = {};
+        stages?.forEach(s => { stageMap[s.id] = s.name.toLowerCase(); });
+
+        const { data: leadsWithStages } = await supabase
+            .from('leads')
+            .select('current_stage_id');
+
+        const pipelineCounts = {
+            new: 0,
+            contacted: 0,
+            viewing: 0,
+            negotiating: 0,
+            closed: 0
+        };
+
+        (leadsWithStages || []).forEach(lead => {
+            const stageName = stageMap[lead.current_stage_id] || '';
+            if (stageName.includes('new')) pipelineCounts.new++;
+            else if (stageName.includes('interested') || stageName.includes('contacted')) pipelineCounts.contacted++;
+            else if (stageName.includes('qualified') || stageName.includes('appointment') || stageName.includes('viewing')) pipelineCounts.viewing++;
+            else if (stageName.includes('negotiating')) pipelineCounts.negotiating++;
+            else if (stageName.includes('won') || stageName.includes('closed')) pipelineCounts.closed++;
+            else pipelineCounts.new++; // Default to new
+        });
+
+        // 6. Closure Insights - Why leads haven't closed
+        const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const threeDaysAgo = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+
+        // No response in 24h
+        const { count: noResponse24h } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .lt('last_message_at', oneDayAgo.toISOString())
+            .is('bot_disabled', false);
+
+        // Stalled leads (no activity 3+ days)
+        const { count: stalledLeads } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .lt('last_message_at', threeDaysAgo.toISOString());
+
+        // Leads needing human attention (likely complex issues)
+        const { count: needsAttention } = await supabase
+            .from('leads')
+            .select('*', { count: 'exact', head: true })
+            .eq('needs_human_attention', true);
+
+        // Leads with appointments that were no-shows
+        const { count: noShows } = await supabase
+            .from('appointments')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'no_show');
+
+        // Cancelled appointments
+        const { count: cancelled } = await supabase
+            .from('appointments')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', 'cancelled');
+
+        const closureInsights: LeadInsight[] = [
+            { reason: 'No Response (24h+)', count: noResponse24h || 0, description: 'Leads waiting for your reply' },
+            { reason: 'Stalled Leads', count: stalledLeads || 0, description: 'No activity for 3+ days' },
+            { reason: 'Needs Human Attention', count: needsAttention || 0, description: 'Bot escalated to agent' },
+            { reason: 'No-Shows', count: noShows || 0, description: 'Missed scheduled viewings' },
+            { reason: 'Cancelled Viewings', count: cancelled || 0, description: 'Appointments that were cancelled' },
+        ].filter(insight => insight.count > 0);
+
+        return {
+            leads: {
+                today: leadsToday || 0,
+                week: thisWeekCount,
+                month: leadsThisMonth || 0,
+                growth
+            },
+            activeListings: activeListings || 0,
+            propertiesUnderContract: underContract || 0,
+            viewings: {
+                scheduled: scheduledViewings || 0,
+                pending: pendingViewings || 0,
+                upcoming: upcomingViewings
+            },
+            closureInsights,
+            pipeline: pipelineCounts
+        };
+    } catch (error) {
+        console.error('Error fetching real estate metrics:', error);
+        return {
+            leads: { today: 0, week: 0, month: 0, growth: 0 },
+            activeListings: 0,
+            propertiesUnderContract: 0,
+            viewings: { scheduled: 0, pending: 0, upcoming: [] },
+            closureInsights: [],
+            pipeline: { new: 0, contacted: 0, viewing: 0, negotiating: 0, closed: 0 }
+        };
+    }
+}
+
+// Export cached version (30s cache for real estate data)
+export const getRealEstateMetrics = unstable_cache(
+    fetchRealEstateMetricsUncached,
+    ['real-estate-metrics'],
+    { revalidate: 30, tags: ['dashboard', 'real-estate'] }
+);

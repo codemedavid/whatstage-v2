@@ -10,6 +10,7 @@ import DashboardShell from '../components/dashboard/DashboardShell';
 import DashboardTabs from '../components/dashboard/DashboardTabs';
 import HumanTakeoverPage from '../components/dashboard/HumanTakeoverPage';
 import EcommerceDashboard from '../components/dashboard/ecommerce/EcommerceDashboard';
+import RealEstateDashboard from '../components/dashboard/real-estate/RealEstateDashboard';
 import LeadDetailsModal from './pipeline/components/LeadDetailsModal';
 import type { DashboardData, FlaggedLead, EcommerceMetrics, OverviewMetrics } from '../lib/dashboardData';
 
@@ -125,6 +126,28 @@ export default function DashboardClient({ initialData, initialEcommerceMetrics }
         />
     );
 
+    // Render Real Estate Dashboard Content (Grid)
+    const renderRealEstateOverview = () => (
+        <RealEstateDashboard
+            initialStatus={status}
+            initialFlaggedLeads={flaggedLeads}
+            initialActiveSessions={activeSessions}
+            onLeadClick={handleLeadClick}
+        />
+    );
+
+    // Render Real Estate Dashboard with Tabs
+    const renderRealEstateDashboard = () => (
+        <div className="flex flex-col h-full">
+            <DashboardTabs
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
+                humanTakeoverCount={flaggedLeads.length}
+            />
+            {activeTab === 'Overview' ? renderRealEstateOverview() : renderHumanTakeoverContent()}
+        </div>
+    );
+
     // Render Overview content (default dashboard)
     const renderOverviewContent = () => (
         <div className="grid grid-cols-12 grid-rows-2 gap-6 h-full min-h-[600px]">
@@ -196,7 +219,9 @@ export default function DashboardClient({ initialData, initialEcommerceMetrics }
             <Header />
             <div className="flex-1 overflow-hidden">
                 <DashboardShell>
-                    {storeType === 'ecommerce' ? renderEcommerceDashboard() : renderDefaultDashboard()}
+                    {storeType === 'ecommerce' ? renderEcommerceDashboard() :
+                        storeType === 'real_estate' ? renderRealEstateDashboard() :
+                            renderDefaultDashboard()}
                 </DashboardShell>
             </div>
 

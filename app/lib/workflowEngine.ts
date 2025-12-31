@@ -530,3 +530,65 @@ export async function triggerWorkflowsForAppointment(
     }
 }
 
+/**
+ * Trigger workflows when a digital product is purchased
+ * @param purchaseId - The ID of the digital product purchase record
+ * @param senderId - Facebook PSID of the purchaser (may be null for web-only purchases)
+ * @param digitalProductId - The ID of the digital product that was purchased
+ * @param leadId - The ID of the lead who made the purchase
+ */
+export async function triggerWorkflowsForDigitalPurchase(
+    purchaseId: string,
+    senderId: string | null,
+    digitalProductId: string,
+    leadId: string
+): Promise<void> {
+    console.log(`[WorkflowEngine] Checking workflows for digital product purchase ${purchaseId}`);
+
+    if (!senderId) {
+        console.log('[WorkflowEngine] No sender ID (PSID) provided, cannot send Messenger messages');
+        return;
+    }
+
+    // Find workflows with digital_product_purchased trigger
+    // Either matching the specific product ID or any product (NULL trigger_digital_product_id)
+    const { data: workflows, error: workflowError } = await supabase
+        .from('workflows')
+        .select('*')
+        .eq('trigger_type', 'digital_product_purchased')
+        .eq('is_published', true);
+
+    if (workflowError) {
+        console.error('[WorkflowEngine] Error fetching digital product workflows:', workflowError);
+        return;
+    }
+
+    if (!workflows || workflows.length === 0) {
+        console.log('[WorkflowEngine] No digital product purchase workflows found');
+        return;
+    }
+
+    // Filter workflows: either matching specific product or trigger_digital_product_id is null (any product)
+    const matchingWorkflows = workflows.filter(w =>
+        w.trigger_digital_product_id === null ||
+        w.trigger_digital_product_id === digitalProductId
+    );
+
+    if (matchingWorkflows.length === 0) {
+        console.log('[WorkflowEngine] No matching workflows for product:', digitalProductId);
+        return;
+    }
+
+    console.log(`[WorkflowEngine] Found ${matchingWorkflows.length} workflows to trigger:`, matchingWorkflows.map(w => w.name));
+
+    // Execute each matching workflow
+    for (const workflow of matchingWorkflows) {
+        console.log(`[WorkflowEngine] Executing digital product workflow: ${workflow.name} (${workflow.id})`);
+
+        await executeWorkflow(workflow.id, leadId, senderId, {
+            skipPublishCheck: true,
+        });
+    }
+
+    console.log(`[WorkflowEngine] Completed triggering workflows for purchase ${purchaseId}`);
+}

@@ -31,6 +31,144 @@ async function getEmbedding(text: string, inputType: 'query' | 'passage'): Promi
     return data.data[0].embedding;
 }
 
+// ==================== UNIFIED SEARCH ====================
+
+/** Result from unified search across documents and media */
+export interface UnifiedSearchResult {
+    sourceType: 'document' | 'media';
+    content: string;
+    similarity: number;
+    metadata: Record<string, unknown>;
+    // Media-specific fields (null for documents)
+    mediaId?: string;
+    mediaUrl?: string;
+    mediaType?: 'image' | 'video' | 'audio' | 'file';
+    mediaTitle?: string;
+    mediaThumbnail?: string;
+}
+
+/** Media match result for chatbot suggestions */
+export interface MediaMatch {
+    id: string;
+    title: string;
+    description: string;
+    media_url: string;
+    media_type: 'image' | 'video' | 'audio' | 'file';
+    thumbnail_url: string | null;
+    similarity: number;
+    keywords?: string[];
+    trigger_phrases?: string[];
+}
+
+/** Options for unified search */
+export interface UnifiedSearchOptions {
+    includeMedia?: boolean;
+    documentLimit?: number;
+    mediaLimit?: number;
+    documentThreshold?: number;
+    mediaThreshold?: number;
+}
+
+/**
+ * Unified search across documents AND media
+ * Returns combined results for RAG context and media suggestions
+ */
+export async function searchAllSources(
+    query: string,
+    options: UnifiedSearchOptions = {}
+): Promise<{
+    documents: string;
+    relevantMedia: MediaMatch[];
+    allResults: UnifiedSearchResult[];
+}> {
+    const {
+        includeMedia = true,
+        documentLimit = 5,
+        mediaLimit = 3,
+        documentThreshold = 0.35,
+        mediaThreshold = 0.45,
+    } = options;
+
+    try {
+        console.log(`[RAG] Unified search for: "${query.substring(0, 50)}..."`);
+
+        // Generate query embedding once
+        const queryEmbedding = await getEmbedding(query, 'query');
+
+        // Call unified search RPC
+        const { data, error } = await supabase.rpc('search_all_sources', {
+            query_embedding: queryEmbedding,
+            doc_threshold: documentThreshold,
+            media_threshold: includeMedia ? mediaThreshold : 1.0,
+            doc_count: documentLimit,
+            media_count: includeMedia ? mediaLimit : 0,
+        });
+
+        if (error) {
+            console.error('[RAG] Unified search error:', error);
+            // Fallback to standard document search
+            const fallbackDocs = await searchDocuments(query, documentLimit);
+            return { documents: fallbackDocs, relevantMedia: [], allResults: [] };
+        }
+
+        if (!data || data.length === 0) {
+            console.log('[RAG] No unified results found');
+            return { documents: '', relevantMedia: [], allResults: [] };
+        }
+
+        // Parse results
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const allResults: UnifiedSearchResult[] = data.map((row: any) => ({
+            sourceType: row.source_type as 'document' | 'media',
+            content: row.content,
+            similarity: row.similarity,
+            metadata: row.metadata || {},
+            mediaId: row.media_id || undefined,
+            mediaUrl: row.media_url || undefined,
+            mediaType: row.media_type as 'image' | 'video' | 'audio' | 'file' | undefined,
+            mediaTitle: row.media_title || undefined,
+            mediaThumbnail: row.media_thumbnail || undefined,
+        }));
+
+        // Separate documents and media
+        const documentResults = allResults.filter(r => r.sourceType === 'document');
+        const mediaResults = allResults.filter(r => r.sourceType === 'media');
+
+        // Combine document content for RAG context
+        const documents = documentResults
+            .slice(0, documentLimit)
+            .map(d => d.content)
+            .join('\n\n');
+
+        // Map media results to MediaMatch format
+        const relevantMedia: MediaMatch[] = mediaResults
+            .slice(0, mediaLimit)
+            .map(m => ({
+                id: m.mediaId!,
+                title: m.mediaTitle || 'Untitled',
+                description: m.content,
+                media_url: m.mediaUrl!,
+                media_type: m.mediaType!,
+                thumbnail_url: m.mediaThumbnail || null,
+                similarity: m.similarity,
+                keywords: (m.metadata?.keywords as string[]) || [],
+                trigger_phrases: (m.metadata?.trigger_phrases as string[]) || [],
+            }));
+
+        console.log(`[RAG] Unified results: ${documentResults.length} docs, ${mediaResults.length} media`);
+
+        if (relevantMedia.length > 0) {
+            console.log(`[RAG] Top media match: "${relevantMedia[0].title}" (${relevantMedia[0].similarity.toFixed(3)})`);
+        }
+
+        return { documents, relevantMedia, allResults };
+    } catch (err) {
+        console.error('[RAG] Unified search failed:', err);
+        const fallbackDocs = await searchDocuments(query, options.documentLimit || 5);
+        return { documents: fallbackDocs, relevantMedia: [], allResults: [] };
+    }
+}
+
 // Enriched metadata interface for documents
 export interface DocumentMetadata {
     categoryId?: string;
@@ -41,7 +179,8 @@ export interface DocumentMetadata {
     [key: string]: unknown;   // Allow additional custom fields
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
+ 
 export async function addDocument(content: string, metadata: DocumentMetadata = {}) {
     try {
         const { categoryId, sourceType, confidenceScore, verifiedAt, expiresAt, ...restMetadata } = metadata;

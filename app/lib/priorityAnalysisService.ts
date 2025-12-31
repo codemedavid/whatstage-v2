@@ -109,6 +109,7 @@ export async function analyzePriority(
 
 export async function updateLeadPriority(senderId: string, result: PriorityAnalysisResult) {
     try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const updateData: any = {
             attention_priority: result.priority,
             priority_analyzed_at: new Date().toISOString(),

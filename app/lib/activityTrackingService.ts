@@ -10,7 +10,9 @@ export type ActivityType =
     | 'appointment_cancelled'
     | 'payment_sent'
     | 'add_to_cart'
-    | 'order_completed';
+    | 'order_completed'
+    | 'digital_purchase_completed'
+    | 'media_sent';
 
 export interface LeadActivity {
     id: string;
@@ -163,6 +165,18 @@ export function buildActivityContextForAI(activities: LeadActivity[]): string {
                 description = `Completed an order`;
                 if (activity.metadata?.order_id) {
                     description += ` (Order #${activity.metadata.order_id})`;
+                }
+                break;
+            case 'digital_purchase_completed':
+                description = `Purchased digital product "${activity.item_name || activity.item_id}"`;
+                if (activity.metadata?.amount_paid) {
+                    description += ` (₱${activity.metadata.amount_paid})`;
+                }
+                break;
+            case 'media_sent':
+                description = `Sent media: "${activity.item_name || activity.item_id}"`;
+                if (activity.metadata?.media_type) {
+                    description += ` (${activity.metadata.media_type})`;
                 }
                 break;
             default:

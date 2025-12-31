@@ -364,7 +364,7 @@ export async function DELETE(request: NextRequest) {
         } else if (productName) {
             // Try multiple search strategies for product name
             // 1. First try exact match with ilike
-            let { data: directMatch } = await supabase
+            const { data: directMatch } = await supabase
                 .from('order_items')
                 .select('id, product_name')
                 .eq('order_id', cart.id)

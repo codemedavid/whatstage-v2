@@ -18,6 +18,7 @@ export default function BotGoalStep({ initialData, onNext, isLoading }: BotGoalS
         { id: 'Appointment Booking', icon: '📅', title: 'Appointment Booking', desc: 'Schedule appointments' },
         { id: 'Tripping', icon: '🏠', title: 'Tripping', desc: 'Real estate site visits' },
         { id: 'Purchase', icon: '💰', title: 'Purchase', desc: 'Direct sales' },
+        { id: 'Subscribe', icon: '📬', title: 'Subscribe', desc: 'Newsletter & email list' },
     ];
 
     const handleSubmit = (e: React.FormEvent) => {

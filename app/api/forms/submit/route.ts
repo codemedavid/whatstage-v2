@@ -12,7 +12,7 @@ export async function POST(request: Request) {
 
     try {
         const body = await request.json();
-        const { form_id, data: submissionData } = body;
+        const { form_id, data: submissionData, digital_product_id, user_id } = body;
 
         if (!form_id || !submissionData) {
             return NextResponse.json({ error: 'Missing form_id or data' }, { status: 400 });
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
         let email = null;
         let phone = null;
         let name = null;
-        let customData: Record<string, any> = {};
+        const customData: Record<string, any> = {};
 
         fields.forEach((field: any) => {
             const value = submissionData[field.id]; // data keyed by field_id
@@ -73,10 +73,25 @@ export async function POST(request: Request) {
             }
         });
 
-        // Try to find existing lead by email or phone
+        // Try to find existing lead
         let leadId = null;
 
-        if (email) {
+        // First priority: Check for existing Facebook lead by sender_id (PSID)
+        // This ensures Messenger users are linked to their existing lead
+        if (user_id) {
+            const { data: fbLead } = await supabase
+                .from('leads')
+                .select('id')
+                .eq('sender_id', user_id)
+                .single();
+            if (fbLead) {
+                leadId = fbLead.id;
+                console.log(`[FormSubmit] Found existing Facebook lead: ${leadId} for PSID: ${user_id}`);
+            }
+        }
+
+        // Fallback: Try to find by email
+        if (!leadId && email) {
             const { data: existingLead } = await supabase
                 .from('leads')
                 .select('id')
@@ -86,6 +101,7 @@ export async function POST(request: Request) {
             if (existingLead) leadId = existingLead.id;
         }
 
+        // Fallback: Try to find by phone
         if (!leadId && phone) {
             const { data: existingLead } = await supabase
                 .from('leads')
@@ -96,20 +112,29 @@ export async function POST(request: Request) {
             if (existingLead) leadId = existingLead.id;
         }
 
+        // Track if we found by Facebook PSID (to preserve original Messenger name)
+        const isFromMessenger = !!user_id && leadId !== null;
+
         // 3. Create or Update Lead
         if (leadId) {
-            // Update
-            const updates: any = { custom_data: customData }; // This overwrites custom_data? Maybe merge?
-            // Let's do a simple update for now. 
-            // Need to be careful not to overwrite valid data with nulls, but here we only scraped valid values.
-            if (name) updates.name = name;
+            // Update existing lead
+            // Store form name in custom_data to preserve original Messenger name
+            if (name && isFromMessenger) {
+                customData['form_name'] = name; // Store form-submitted name separately
+            }
+
+            const updates: any = { custom_data: customData };
+
+            // Only update name if NOT from Messenger (preserve original FB profile name)
+            if (name && !isFromMessenger) {
+                updates.name = name;
+            }
+
+            // Always update phone/email if provided (these are more reliable from forms)
             if (phone) updates.phone = phone;
             if (email) updates.email = email;
 
-            // Merge custom data?
-            // Supabase update merges columns, but for JSONB it replaces the column value usually unless using jsonb_set.
-            // Let's fetch current custom_data first? Optimization for later.
-            // For now, let's just save what we have.
+            console.log(`[FormSubmit] Updating lead ${leadId}, isFromMessenger: ${isFromMessenger}, preserving original name: ${isFromMessenger}`);
 
             await supabase
                 .from('leads')
@@ -145,16 +170,76 @@ export async function POST(request: Request) {
         }
 
         // 4. Record Submission
-        const { error: matchError } = await supabase
+        const { data: submission, error: matchError } = await supabase
             .from('form_submissions')
             .insert([{
                 form_id: form_id,
                 lead_id: leadId,
-                submitted_data: submissionData
-            }]);
+                submitted_data: {
+                    ...submissionData,
+                    ...(user_id ? { _messenger_user_id: user_id } : {})
+                },
+                digital_product_id: digital_product_id || null
+            }])
+            .select()
+            .single();
 
         if (matchError) {
             console.error('Submission log error', matchError);
+        }
+
+        // 5. If this is a digital product checkout, create a purchase record
+        if (digital_product_id && submission) {
+            try {
+                // Fetch digital product details for price
+                const { data: digitalProduct } = await supabase
+                    .from('digital_products')
+                    .select('price, access_duration_days')
+                    .eq('id', digital_product_id)
+                    .single();
+
+                let accessExpiresAt = null;
+                if (digitalProduct?.access_duration_days) {
+                    const expiryDate = new Date();
+                    expiryDate.setDate(expiryDate.getDate() + digitalProduct.access_duration_days);
+                    accessExpiresAt = expiryDate.toISOString();
+                }
+
+                await supabase
+                    .from('digital_product_purchases')
+                    .insert([{
+                        digital_product_id: digital_product_id,
+                        lead_id: leadId,
+                        form_submission_id: submission.id,
+                        facebook_psid: user_id || null,
+                        amount_paid: digitalProduct?.price || 0,
+                        access_expires_at: accessExpiresAt,
+                        status: 'pending'
+                    }])
+                    .select()
+                    .single()
+                    .then(async ({ data: purchaseRecord }) => {
+                        if (purchaseRecord) {
+                            // Trigger workflows for digital product purchase
+                            try {
+                                const { triggerWorkflowsForDigitalPurchase } = await import('@/app/lib/workflowEngine');
+                                await triggerWorkflowsForDigitalPurchase(
+                                    purchaseRecord.id,
+                                    user_id || null,
+                                    digital_product_id,
+                                    leadId
+                                );
+                            } catch (workflowError) {
+                                console.error('[FormSubmit] Error triggering digital product workflows:', workflowError);
+                            }
+                        }
+                    });
+
+                console.log(`[FormSubmit] Created digital product purchase for product ${digital_product_id}, lead ${leadId}, PSID: ${user_id || 'none'}`);
+            } catch (purchaseError) {
+                console.error('Error creating purchase record:', purchaseError);
+                // Don't fail the submission if purchase record fails
+            }
         }
 
         return NextResponse.json({ success: true, lead_id: leadId });

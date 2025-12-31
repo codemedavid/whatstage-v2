@@ -41,12 +41,14 @@ export async function updateSession(request: NextRequest) {
     // Allow public access to product/property detail pages
     const isPublicProductPage = /^\/product\/[^/]+$/.test(request.nextUrl.pathname);
     const isPublicPropertyPage = /^\/property\/[^/]+$/.test(request.nextUrl.pathname);
+    const isDigitalProductPage = /^\/digital\/[^/]+$/.test(request.nextUrl.pathname);
+    const isPublicFormPage = /^\/f\/[^/]+$/.test(request.nextUrl.pathname);
     const isBookingPage = request.nextUrl.pathname === '/book';
     const isCheckoutPage = request.nextUrl.pathname === '/checkout';
     const isStorePage = request.nextUrl.pathname === '/store';
     const isAdminPage = request.nextUrl.pathname.startsWith('/admin'); // Central Router admin
 
-    if (!user && !isLoginPage && !isApiRoute && !isPublicProductPage && !isPublicPropertyPage && !isBookingPage && !isCheckoutPage && !isStorePage && !isAdminPage) {
+    if (!user && !isLoginPage && !isApiRoute && !isPublicProductPage && !isPublicPropertyPage && !isDigitalProductPage && !isPublicFormPage && !isBookingPage && !isCheckoutPage && !isStorePage && !isAdminPage) {
         // Redirect unauthenticated users to login
         const url = request.nextUrl.clone();
         url.pathname = '/login';

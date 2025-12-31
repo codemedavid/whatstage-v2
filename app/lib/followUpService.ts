@@ -437,7 +437,7 @@ export async function getLeadsNeedingFollowUp(limit: number = 10): Promise<Lead[
     console.log(`[FollowUp] Leads with upcoming appointments: ${senderIdsWithAppointments.size}`);
 
     // Step 4: Query leads with basic filters
-    let query = supabase
+    const query = supabase
         .from('leads')
         .select('id, sender_id, name, follow_up_count, last_bot_message_at, last_customer_message_at, next_follow_up_at, follow_up_enabled, current_stage_id')
         .eq('follow_up_enabled', true)

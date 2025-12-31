@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { searchDocuments } from './rag';
+import { searchAllSources, MediaMatch } from './rag';
 import { supabase } from './supabase';
 import { getRecentActivities, buildActivityContextForAI, LeadActivity, findRecentActivityByType } from './activityTrackingService';
 import { getCatalogContext } from './productRagService';
@@ -7,7 +7,14 @@ import { getCurrentCart, buildCartContextForAI } from './cartContextService';
 import { getLeadEntities, buildEntityContextForAI, extractEntitiesFromMessage, LeadEntity } from './entityTrackingService';
 import { calculateImportance } from './importanceService';
 import { getSmartPassiveState, buildSmartPassiveContext, SmartPassiveState } from './smartPassiveService';
-import { withRetry, isTransientError } from './retryHelper';
+import { withRetry, isTransientError, isRateLimitError } from './retryHelper';
+import { buildTimeContext } from './responseVarietyService';
+import { detectObjection, getObjectionHandlingPrompt } from './objectionHandlerService';
+// Rate limit resilience services
+import { getAvailableApiKey, markKeyRateLimited } from './apiKeyRotationService';
+import { canProceed, recordSuccess, recordFailure, getCircuitState, CircuitState } from './circuitBreakerService';
+import { trackRequest, shouldThrottle } from './rateLimitService';
+import { getSmartFallbackMessage, getBusyFallbackMessage } from './fallbackMessageService';
 
 const MAX_HISTORY = 10; // Reduced to prevent context overload
 
@@ -45,6 +52,31 @@ async function getBotSettings() {
     }
 }
 
+// Dynamic client creation with API key rotation
+let currentClient: OpenAI | null = null;
+let currentKeyId: string | null = null;
+
+/**
+ * Get or create OpenAI client with API key rotation
+ */
+async function getAIClient(): Promise<{ client: OpenAI; keyId: string | null }> {
+    const { apiKey, keyId } = await getAvailableApiKey('nvidia');
+
+    // Reuse client if same key
+    if (currentClient && currentKeyId === keyId) {
+        return { client: currentClient, keyId };
+    }
+
+    currentClient = new OpenAI({
+        baseURL: 'https://integrate.api.nvidia.com/v1',
+        apiKey,
+    });
+    currentKeyId = keyId;
+
+    return { client: currentClient, keyId };
+}
+
+// Legacy client for backward compatibility (uses env key)
 const client = new OpenAI({
     baseURL: 'https://integrate.api.nvidia.com/v1',
     apiKey: process.env.NVIDIA_API_KEY,
@@ -126,12 +158,60 @@ async function getLeadGoalStatus(senderId: string): Promise<LeadGoalStatus> {
     }
 }
 
+// Detect customer's language style from recent messages
+function detectLanguageStyle(history: { role: string; content: string }[]): 'formal' | 'casual' | 'taglish' {
+    const userMessages = history.filter(m => m.role === 'user').slice(-3);
+    if (userMessages.length === 0) return 'casual';
+
+    const text = userMessages.map(m => m.content).join(' ').toLowerCase();
+
+    // Taglish markers (Filipino words mixed with English)
+    const taglishMarkers = ['po', 'opo', 'ako', 'mo', 'ko', 'ba', 'nga', 'lang', 'yung', 'ano', 'naman', 'pala', 'sige', 'oo', 'hindi', 'gusto', 'kasi'];
+    // Formal English markers
+    const formalMarkers = ['please', 'thank you', 'i would like', 'may i', 'could you', 'kindly', 'appreciate', 'regarding'];
+
+    const taglishScore = taglishMarkers.filter(m => text.includes(m)).length;
+    const formalScore = formalMarkers.filter(m => text.includes(m)).length;
+
+    if (formalScore >= 2) return 'formal';
+    if (taglishScore >= 2) return 'taglish';
+    return 'casual';
+}
+
+// Build style guidance based on detected language style
+function buildStylePrompt(languageStyle: 'formal' | 'casual' | 'taglish'): string {
+    const styleGuides: Record<string, string> = {
+        formal: `COMMUNICATION STYLE: Formal
+- Use polite, professional English
+- Be respectful and courteous
+- Use fewer emojis (1 max per message)
+- Example: "Thank you for your inquiry. I'd be happy to help."`,
+
+        casual: `COMMUNICATION STYLE: Casual
+- Be friendly and conversational
+- Use contractions and relaxed language
+- 1-2 emojis per message is fine
+- Example: "Hey! Yeah, we've got that. Want me to show you?"`,
+
+        taglish: `COMMUNICATION STYLE: Taglish
+- Mix Filipino and English naturally
+- Use common expressions: "po", "sige", "oo naman"
+- Be warm and approachable
+- 1-2 emojis per message
+- Example: "Oo naman! Meron po tayo niyan. Gusto mo i-check?"`
+    };
+
+    return styleGuides[languageStyle] || styleGuides.casual;
+}
+
 // Build goal-driven prompt context
+
 function buildGoalPromptContext(
     primaryGoal: string,
     goalStatus: LeadGoalStatus,
     hasProducts: boolean,
-    hasProperties: boolean
+    hasProperties: boolean,
+    hasDigitalProducts: boolean = false
 ): string {
     // If goal is already met, instruct AI to stop pursuing
     if (goalStatus.goal_met_at) {
@@ -177,12 +257,19 @@ Focus on helping the customer with their queries now.
             goalInstructions = `
 PRIMARY GOAL: 📅 Appointment Booking
 Your mission: Guide the customer to book an appointment.
-- When relevant, suggest scheduling: "Gusto mo ba mag-schedule? [SHOW_BOOKING]"
+
+SOFT CTA APPROACH (don't be pushy):
+- Don't say "Book now!" - instead: "kung gusto mo, pwede ka mag-schedule dito"
+- Create curiosity: "may available slots pa this week kung interested ka"
+- Use questions: "gusto mo ba mag-set ng schedule?"
+- When relevant: "Kung free ka, i-check mo yung slots dito: [SHOW_BOOKING]"
+
 - Be helpful first, then naturally transition to booking.
 - Once booked, the goal is complete - stop suggesting more bookings.
 
 `;
             break;
+
 
         case 'tripping':
             goalInstructions = `
@@ -200,8 +287,14 @@ ${hasProperties ? '- Show properties when relevant: [SHOW_PROPERTIES]' : ''}
 PRIMARY GOAL: 💰 Purchase
 Your mission: Guide the customer to make a purchase.
 ${hasProducts ? '- Show products when relevant: [SHOW_PRODUCTS]' : ''}
+${hasDigitalProducts ? '- Show digital products/courses when relevant: [SHOW_DIGITAL_PRODUCTS]' : ''}
 - Help them find what they need and encourage checkout.
 - Once they complete an order, the goal is complete.
+
+CRITICAL PRIORITY RULE:
+- Your #1 focus is PURCHASING products or digital products. This is the main goal.
+- Do NOT suggest [SHOW_BOOKING] or appointment scheduling when products/digital products are available.
+- Only mention booking as a LAST RESORT if there are NO products/digital products and customer explicitly asks for consultation.
 
 `;
             break;
@@ -509,10 +602,11 @@ export async function getBotResponse(
     }
 
     // Run independent operations in PARALLEL
+    // Using unified search for documents + media (single embedding, single query)
     const results = await Promise.all([
         getBotRules(),
         getConversationHistory(senderId),
-        searchDocuments(userMessage),
+        searchAllSources(userMessage, { includeMedia: true }), // Unified search for docs + media
         getBotInstructions(),
         getRecentActivities(senderId, 5), // Get last 5 activities for context
         getCatalogContext(), // Get products, properties, payment methods
@@ -523,8 +617,15 @@ export async function getBotResponse(
         getLeadGoalStatus(senderId), // Get goal completion status
     ]);
 
-    // Deference the promise results correctly (added summary, cart, entities, smartPassiveState, and goalStatus)
-    const [rules, history, context, instructions, activities, catalogContext] = results.slice(0, 6) as [string[], { role: string; content: string }[], string, string, LeadActivity[], string];
+    // Destructure promise results
+    const [rules, history, unifiedSearch, instructions, activities, catalogContext] = results.slice(0, 6) as [
+        string[],
+        { role: string; content: string }[],
+        Awaited<ReturnType<typeof searchAllSources>>,
+        string,
+        LeadActivity[],
+        string
+    ];
     const summary = results[6] as string;
     const cart = results[7] as Awaited<ReturnType<typeof getCurrentCart>>;
     const entities = results[8] as LeadEntity[];
@@ -532,13 +633,23 @@ export async function getBotResponse(
     const goalStatus = results[10] as LeadGoalStatus;
     const primaryGoal = settings.primary_goal || 'lead_generation';
 
-    console.log(`Parallel fetch took ${Date.now() - startTime}ms - rules: ${rules.length}, history: ${history.length}, activities: ${activities.length}, catalog: ${catalogContext.length} chars, isPaymentQuery: ${isPaymentRelated}, summary len: ${summary.length}, cart items: ${cart?.item_count || 0}, entities: ${entities.length}, smartPassive: ${smartPassiveState.isActive}`);
+    // Extract document context and media from unified search
+    const context = unifiedSearch.documents;
+    const relevantMedia = unifiedSearch.relevantMedia;
+
+    // Build media search result for compatibility with existing code
+    const mediaSearchResult: { media: MediaMatch | null; confidence: 'high' | 'medium' | 'low' | 'none' } = relevantMedia.length > 0
+        ? { media: relevantMedia[0], confidence: relevantMedia[0].similarity >= 0.70 ? 'high' : relevantMedia[0].similarity >= 0.55 ? 'medium' : 'low' }
+        : { media: null, confidence: 'none' };
+
+    console.log(`Parallel fetch took ${Date.now() - startTime}ms - rules: ${rules.length}, history: ${history.length}, activities: ${activities.length}, catalog: ${catalogContext.length} chars, isPaymentQuery: ${isPaymentRelated}, summary len: ${summary.length}, cart items: ${cart?.item_count || 0}, entities: ${entities.length}, smartPassive: ${smartPassiveState.isActive}, mediaMatches: ${relevantMedia.length}, topMedia: ${relevantMedia[0]?.title || 'none'}`);
     console.log('[RAG CONTEXT]:', context ? context.substring(0, 500) + '...' : 'NO CONTEXT RETRIEVED');
 
 
     // Check what's available in the catalog to conditionally enable tools
     const hasProducts = catalogContext && catalogContext.includes('PRODUCT CATALOG:');
     const hasProperties = catalogContext && catalogContext.includes('PROPERTY LISTINGS:');
+    const hasDigitalProducts = catalogContext && catalogContext.includes('DIGITAL PRODUCT CATALOG:');
 
     // Anti-looping: Check for recent activities to avoid suggesting recently completed actions
     const recentBooking = findRecentActivityByType(activities, 'appointment_booked', 24);
@@ -574,18 +685,60 @@ export async function getBotResponse(
         examplesList += `- Example (specific recommendation): "Base sa budget mo, try mo tingnan to: [RECOMMEND_PROPERTY:abc123-uuid-here]"\n`;
     }
 
-    // General tools - conditionally show booking based on recent activity
-    if (!recentBooking) {
+    // Digital product tools - for courses, digital downloads, online content
+    if (hasDigitalProducts) {
+        uiToolsList += `- [SHOW_DIGITAL_PRODUCTS] : When user wants to BROWSE ALL digital products/courses available. This shows a visual card carousel.\n`;
+        uiToolsList += `- [RECOMMEND_DIGITAL_PRODUCT:digital_product_id] : When recommending a SPECIFIC digital product/course based on user needs. Use the exact digital product ID from the catalog.\n`;
+        examplesList += `- Example (browse digital): "Meron kaming online courses! Check mo: [SHOW_DIGITAL_PRODUCTS]"\n`;
+        examplesList += `- Example (specific digital): "Perfect para sayo yung course na to: [RECOMMEND_DIGITAL_PRODUCT:abc123-uuid-here]"\n`;
+    }
+
+    // General tools - conditionally show booking based on goal + availability
+    // Only show booking tool when:
+    // 1. Goal is appointment_booking or tripping (booking-focused goals)
+    // 2. Goal is lead_generation (general)
+    // 3. OR no products/properties/digital products exist (fallback)
+    const shouldShowBookingTool = !recentBooking && (
+        primaryGoal === 'appointment_booking' ||
+        primaryGoal === 'tripping' ||
+        primaryGoal === 'lead_generation' ||
+        (!hasProducts && !hasProperties && !hasDigitalProducts) // Fallback when no products/properties/digital products exist
+    );
+
+    if (shouldShowBookingTool) {
         uiToolsList += `- [SHOW_BOOKING] : When user wants to schedule a visit, appointment, or consultation.\n`;
         examplesList += `- Example: "Pwede tayo mag-schedule. [SHOW_BOOKING]"`;
     }
     uiToolsList += `- [SHOW_PAYMENT_METHODS] : When user asks how to pay or asks for bank details.\n`;
 
+    // Add media tool if we have a relevant match
+    if (mediaSearchResult.media && mediaSearchResult.confidence !== 'none') {
+        const media = mediaSearchResult.media;
+        uiToolsList += `- [SEND_MEDIA:${media.id}] : Send the "${media.title}" ${media.media_type} to the customer. Use this to share educational content, tours, or demonstrations.\n`;
+        examplesList += `- Example (proactive media): "I have a video that shows exactly that! [SEND_MEDIA:${media.id}]"\n`;
+    }
+
+    // Detect customer's language style from conversation history
+    const languageStyle = detectLanguageStyle(history);
+    const stylePrompt = buildStylePrompt(languageStyle);
+
+    // Get time context for natural greetings
+    const timeContext = buildTimeContext();
+
+    // Detect objections in current message
+    const objection = detectObjection(userMessage);
+    const objectionPrompt = objection ? getObjectionHandlingPrompt(objection) : '';
+
+    // Get customer name from entities for personalization
+    const customerName = entities.find(e => e.entity_type === 'name')?.entity_value || '';
+
     // Build a clear system prompt optimized for Llama 3.1
     let systemPrompt = `You are ${botName}. Your style: ${botTone}.
 
-STYLE: Use Taglish, keep messages short, use 1-2 emojis max.
+${stylePrompt}
 
+${timeContext}
+${customerName ? `CUSTOMER NAME: ${customerName} (use occasionally to personalize, not every message)\n` : ''}
 UI TOOLS (Use these tags when relevant):
 ${uiToolsList}
 
@@ -602,13 +755,56 @@ CRITICAL RULES:
 - When user asks about a SPECIFIC product/property by name or describes their preferences, use [RECOMMEND_PRODUCT:id] or [RECOMMEND_PROPERTY:id] with the matching item's ID from the catalog.
 - When user wants to see ALL available items, use [SHOW_PRODUCTS] or [SHOW_PROPERTIES].
 - Keep your text message SHORT when using recommendation tags - the card will show all the details.
+- DO NOT invent media tags. NEVER use [media], [video], or [image]. Only use [SEND_MEDIA:id] when it appears in the UI TOOLS list above with a valid media ID.
+
+HUMANIZATION TIPS:
+- Don't be too perfect - occasional filler words are okay ("ah", "hmm", "actually")
+- Ask follow-up questions sometimes instead of just answering
+- Reference things they mentioned earlier if relevant
+- Be warm but not over-the-top enthusiastic
 `;
 
+    // Add media suggestion context if available
+    if (mediaSearchResult.media && mediaSearchResult.confidence !== 'none') {
+        const media = mediaSearchResult.media;
+        const confidenceText = mediaSearchResult.confidence === 'high'
+            ? 'This is highly relevant - proactively suggest it'
+            : mediaSearchResult.confidence === 'medium'
+                ? 'This may be helpful - offer it naturally if appropriate'
+                : 'Only mention if the customer explicitly asks for visual content';
+
+        systemPrompt += `
+AVAILABLE MEDIA TO SHARE:
+You have a ${media.media_type} available that may help this conversation:
+- Title: "${media.title}"
+- Description: ${media.description}
+- Relevance: ${confidenceText}
+
+To send this ${media.media_type}, include [SEND_MEDIA:${media.id}] in your response.
+Example: "Meron akong video na pwede mo panoorin para mas magets mo! [SEND_MEDIA:${media.id}]"
+
+IMPORTANT:
+- Be natural - don't force the media if it's not relevant
+- Briefly introduce what the media shows before sending
+- Only use this tag ONCE per response
+`;
+    }
+
+    // Add objection handling if detected
+    if (objection && objectionPrompt) {
+        systemPrompt += `
+OBJECTION DETECTED (${objection}):
+${objectionPrompt}
+
+`;
+    }
+
     // Inject goal-driven context
-    const goalContext = buildGoalPromptContext(primaryGoal, goalStatus, !!hasProducts, !!hasProperties);
+    const goalContext = buildGoalPromptContext(primaryGoal, goalStatus, !!hasProducts, !!hasProperties, !!hasDigitalProducts);
     if (goalContext) {
         systemPrompt += goalContext;
     }
+
 
     if (hasProducts) {
         systemPrompt += `
@@ -841,6 +1037,27 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
     try {
         const llmStart = Date.now();
 
+        // === CIRCUIT BREAKER CHECK ===
+        // If circuit is open, immediately return fallback
+        if (!canProceed('nvidia')) {
+            console.log('[Resilience] Circuit breaker OPEN - returning fallback');
+            return getSmartFallbackMessage(userMessage);
+        }
+
+        // === RATE LIMIT THROTTLING CHECK ===
+        const throttleCheck = await shouldThrottle('nvidia');
+        if (throttleCheck.shouldThrottle) {
+            console.log(`[Resilience] Rate limit critical (${throttleCheck.usagePercent.toFixed(0)}%) - returning fallback`);
+            return getBusyFallbackMessage();
+        }
+        if (throttleCheck.shouldDelay && throttleCheck.delayMs > 0) {
+            console.log(`[Resilience] Throttling: delaying ${throttleCheck.delayMs}ms`);
+            await new Promise(resolve => setTimeout(resolve, throttleCheck.delayMs));
+        }
+
+        // === GET AI CLIENT WITH KEY ROTATION ===
+        const { client: aiClient, keyId } = await getAIClient();
+
         // Use selected model or default to Qwen
         const aiModel = settings.ai_model || "qwen/qwen3-235b-a22b";
 
@@ -860,8 +1077,15 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
             completionOptions.max_tokens = 8192; // DeepSeek supports larger context
         }
 
-        const responseContent = await withRetry(async () => {
-            const stream = await client.chat.completions.create(completionOptions as OpenAI.Chat.ChatCompletionCreateParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
+        let responseContent: string = '';
+        let lastKeyId = keyId;
+
+        responseContent = await withRetry(async () => {
+            // Get fresh client (may rotate key on retry)
+            const { client: retryClient, keyId: retryKeyId } = await getAIClient();
+            lastKeyId = retryKeyId;
+
+            const stream = await retryClient.chat.completions.create(completionOptions as OpenAI.Chat.ChatCompletionCreateParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
 
             let contentBuffer = '';
             let reasoningBuffer = '';
@@ -891,20 +1115,38 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
             maxAttempts: 3,
             initialDelayMs: 1000,
             backoffMultiplier: 2,
+            maxDelayMs: 15000,
+            jitterPercent: 25,
             shouldRetry: isTransientError,
-            onRetry: (attempt, error) => {
-                console.warn(`LLM call failed (attempt ${attempt}), retrying...`, error.message);
+            onRetry: (attempt, error, nextDelayMs) => {
+                console.warn(`LLM call failed (attempt ${attempt}), retrying in ${nextDelayMs}ms...`, error.message);
+
+                // If rate limited, mark key for cooldown and rotate
+                if (isRateLimitError(error) && lastKeyId) {
+                    console.log(`[Resilience] Rate limit hit on key ${lastKeyId?.substring(0, 8)}...`);
+                    markKeyRateLimited(lastKeyId, 60).catch(err => {
+                        console.error('[Resilience] Error marking key rate limited:', err);
+                    });
+                }
+            },
+            onRateLimit: (error, retryAfterMs) => {
+                console.log(`[Resilience] Rate limit with Retry-After: ${retryAfterMs}ms`);
+                // Track for metrics
+                trackRequest('nvidia', 0, false, true).catch(() => { });
             }
         });
 
-        console.log(`LLM call took ${Date.now() - llmStart} ms`);
+        const llmDuration = Date.now() - llmStart;
+        console.log(`LLM call took ${llmDuration} ms`);
+
+        // === TRACK SUCCESS METRICS ===
+        recordSuccess('nvidia');
+        trackRequest('nvidia', llmDuration, false, false).catch(() => { });
 
         // Handle empty responses with a fallback
         if (!responseContent || responseContent.trim() === '') {
             console.warn('Empty response from LLM after retries');
-            // Gracefully degrade - don't send error message to user, just log it.
-            // The user won't get a reply, which is better than "technical issue" message.
-            return "";
+            return getSmartFallbackMessage(userMessage);
         }
 
         // Store bot response (fire and forget)
@@ -920,7 +1162,12 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error("Error calling NVIDIA API after retries:", error.response?.data || error.message || error);
-        // Silent failure - do not send error message to user
-        return "";
+
+        // === RECORD FAILURE FOR CIRCUIT BREAKER ===
+        recordFailure('nvidia', isTransientError(error));
+        trackRequest('nvidia', 0, true, isRateLimitError(error)).catch(() => { });
+
+        // Return user-friendly fallback instead of empty string
+        return getSmartFallbackMessage(userMessage);
     }
 }

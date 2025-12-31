@@ -28,10 +28,11 @@ interface FolderItem {
 }
 
 interface KnowledgeBaseProps {
-  onSelect: (text: string) => void;
+  onSelect: (doc: { id: string; text: string }) => void;
   onCategorySelect?: (category: Category | null) => void;
   onCreateDocument: () => void;
 }
+
 
 const COLORS = [
   { name: 'gray', text: 'text-gray-600', bg: 'bg-gray-100' },
@@ -247,7 +248,7 @@ export default function KnowledgeBase({ onSelect, onCategorySelect, onCreateDocu
   const renderDocItem = (item: KnowledgeItem, inFolder = false) => (
     <div
       key={item.id}
-      onClick={() => bulkMode ? toggleDocSelection(item.id) : onSelect(item.text)}
+      onClick={() => bulkMode ? toggleDocSelection(item.id) : onSelect({ id: item.id, text: item.text })}
       onContextMenu={(e) => handleContextMenu(e, 'doc', item.id)}
       className={`group flex items-center justify-between px-3 py-1.5 ml-2 hover:bg-gray-100 rounded cursor-pointer ${selectedDocs.has(item.id) ? 'bg-teal-50 text-teal-700' : 'text-gray-600'
         }`}
