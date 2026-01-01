@@ -49,6 +49,10 @@ export async function POST(request: NextRequest) {
             access_type = 'instant',
             access_duration_days,
             creator_name,
+            notification_title,
+            notification_greeting,
+            notification_button_text,
+            notification_button_url,
             media = [] // Array of { media_type, media_url, thumbnail_url }
         } = body;
 
@@ -71,7 +75,11 @@ export async function POST(request: NextRequest) {
                 display_order,
                 access_type,
                 access_duration_days: access_duration_days || null,
-                creator_name: creator_name || null
+                creator_name: creator_name || null,
+                notification_title: notification_title || null,
+                notification_greeting: notification_greeting || null,
+                notification_button_text: notification_button_text || null,
+                notification_button_url: notification_button_url || null
             })
             .select()
             .single();

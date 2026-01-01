@@ -20,12 +20,13 @@ import {
     Upload,
     CreditCard,
     X,
-    Image as ImageIcon
+    Image as ImageIcon,
+    Link
 } from 'lucide-react';
 
 interface Media {
     id: string;
-    media_type: 'image' | 'video';
+    media_type: 'image' | 'video' | 'video_link';
     media_url: string;
     thumbnail_url: string | null;
     display_order: number;
@@ -266,6 +267,37 @@ export default function DigitalProductClient({ product: initialProduct, initialF
         return `₱${price.toLocaleString('en-PH', { minimumFractionDigits: 0 })}`;
     };
 
+    // Helper function to get embed URL for video links
+    const getEmbedUrl = (url: string): string | null => {
+        // YouTube patterns
+        const youtubePatterns = [
+            /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+            /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/
+        ];
+        for (const pattern of youtubePatterns) {
+            const match = url.match(pattern);
+            if (match) {
+                return `https://www.youtube.com/embed/${match[1]}?autoplay=1`;
+            }
+        }
+
+        // Vimeo pattern
+        const vimeoPattern = /vimeo\.com\/(\d+)/;
+        const vimeoMatch = url.match(vimeoPattern);
+        if (vimeoMatch) {
+            return `https://player.vimeo.com/video/${vimeoMatch[1]}?autoplay=1`;
+        }
+
+        // Loom pattern
+        const loomPattern = /loom\.com\/share\/([a-zA-Z0-9]+)/;
+        const loomMatch = url.match(loomPattern);
+        if (loomMatch) {
+            return `https://www.loom.com/embed/${loomMatch[1]}?autoplay=1`;
+        }
+
+        return null;
+    };
+
     const nextMedia = () => {
         if (product?.media) {
             setCurrentMediaIndex((prev) =>
@@ -329,7 +361,37 @@ export default function DigitalProductClient({ product: initialProduct, initialF
                                     <div className="relative w-full aspect-video bg-black rounded-lg overflow-hidden group">
                                         {/* Current Media */}
                                         <div className="w-full h-full flex items-center justify-center">
-                                            {currentMedia?.media_type === 'video' ? (
+                                            {currentMedia?.media_type === 'video_link' ? (
+                                                <div className="relative w-full h-full">
+                                                    {isVideoPlaying ? (
+                                                        <iframe
+                                                            src={getEmbedUrl(currentMedia.media_url) || currentMedia.media_url}
+                                                            className="w-full h-full"
+                                                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                                            allowFullScreen
+                                                        />
+                                                    ) : (
+                                                        <div className="relative w-full h-full cursor-pointer" onClick={() => setIsVideoPlaying(true)}>
+                                                            {currentMedia.thumbnail_url ? (
+                                                                <img
+                                                                    src={currentMedia.thumbnail_url}
+                                                                    alt=""
+                                                                    className="w-full h-full object-cover opacity-90 transition-opacity hover:opacity-100"
+                                                                />
+                                                            ) : (
+                                                                <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 to-gray-900">
+                                                                    <Link className="w-12 h-12 text-white/40" />
+                                                                </div>
+                                                            )}
+                                                            <div className="absolute inset-0 flex items-center justify-center">
+                                                                <div className="w-16 h-16 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center hover:scale-110 transition-transform shadow-lg">
+                                                                    <Play className="w-8 h-8 text-white ml-1" fill="white" />
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ) : currentMedia?.media_type === 'video' ? (
                                                 <div className="relative w-full h-full">
                                                     {isVideoPlaying ? (
                                                         <video
@@ -390,12 +452,24 @@ export default function DigitalProductClient({ product: initialProduct, initialF
                                                         : 'border-transparent opacity-60 hover:opacity-100'
                                                         }`}
                                                 >
-                                                    <img
-                                                        src={media.thumbnail_url || media.media_url}
-                                                        alt=""
-                                                        className="w-full h-full object-cover"
-                                                    />
-                                                    {media.media_type === 'video' && (
+                                                    {media.thumbnail_url ? (
+                                                        <img
+                                                            src={media.thumbnail_url}
+                                                            alt=""
+                                                            className="w-full h-full object-cover"
+                                                        />
+                                                    ) : media.media_type === 'video_link' ? (
+                                                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-600 to-gray-800">
+                                                            <Link className="w-4 h-4 text-white/60" />
+                                                        </div>
+                                                    ) : (
+                                                        <img
+                                                            src={media.media_url}
+                                                            alt=""
+                                                            className="w-full h-full object-cover"
+                                                        />
+                                                    )}
+                                                    {(media.media_type === 'video' || media.media_type === 'video_link') && (
                                                         <div className="absolute inset-0 flex items-center justify-center bg-black/30">
                                                             <Play className="w-4 h-4 text-white" fill="white" />
                                                         </div>

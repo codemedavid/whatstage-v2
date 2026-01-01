@@ -77,7 +77,7 @@ interface Property {
 
 interface DigitalProductMedia {
     id?: string;
-    media_type: 'image' | 'video';
+    media_type: 'image' | 'video' | 'video_link';
     media_url: string;
     thumbnail_url?: string | null;
 }
@@ -100,6 +100,10 @@ interface DigitalProduct {
     billing_interval: 'monthly' | 'yearly';
     thumbnail_url: string | null;
     creator_name: string | null;
+    notification_title: string | null;
+    notification_greeting: string | null;
+    notification_button_text: string | null;
+    notification_button_url: string | null;
     media: DigitalProductMedia[];
 }
 
@@ -777,12 +781,24 @@ export default function StorePage() {
                                         <div className="relative aspect-video bg-gradient-to-br from-teal-100 to-emerald-100 overflow-hidden">
                                             {product.media && product.media.length > 0 ? (
                                                 <>
-                                                    <img
-                                                        src={product.media[0].thumbnail_url || product.media[0].media_url}
-                                                        alt={product.title}
-                                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                                                    />
-                                                    {product.media[0].media_type === 'video' && (
+                                                    {product.media[0].thumbnail_url ? (
+                                                        <img
+                                                            src={product.media[0].thumbnail_url}
+                                                            alt={product.title}
+                                                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                                        />
+                                                    ) : product.media[0].media_type === 'video_link' ? (
+                                                        <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-600 to-gray-800">
+                                                            <Film size={40} className="text-white/40" />
+                                                        </div>
+                                                    ) : (
+                                                        <img
+                                                            src={product.media[0].media_url}
+                                                            alt={product.title}
+                                                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                                        />
+                                                    )}
+                                                    {(product.media[0].media_type === 'video' || product.media[0].media_type === 'video_link') && (
                                                         <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                                                             <div className="w-12 h-12 bg-white/90 rounded-full flex items-center justify-center">
                                                                 <Film size={24} className="text-emerald-600 ml-0.5" />

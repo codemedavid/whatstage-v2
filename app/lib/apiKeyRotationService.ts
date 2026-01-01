@@ -26,6 +26,24 @@ const KEY_CACHE_TTL_MS = 30000; // 30 seconds cache
 // Track which key we last used for round-robin
 let lastUsedKeyIndex = -1;
 
+// Track env key cooldown (in-memory since no DB record)
+let envKeyCooldownUntil: number = 0;
+
+/**
+ * Check if the environment key is currently on cooldown
+ */
+function isEnvKeyOnCooldown(): boolean {
+    return Date.now() < envKeyCooldownUntil;
+}
+
+/**
+ * Put the environment key on cooldown
+ */
+function setEnvKeyCooldown(cooldownSeconds: number): void {
+    envKeyCooldownUntil = Date.now() + cooldownSeconds * 1000;
+    console.log(`[APIKeyRotation] Env key on cooldown for ${cooldownSeconds}s`);
+}
+
 export interface AvailableKey {
     apiKey: string;
     keyId: string | null; // null if using env fallback
@@ -33,14 +51,25 @@ export interface AvailableKey {
 
 /**
  * Get an available API key for the given provider
- * Uses round-robin with priority weighting
- * Falls back to environment variable if no DB keys available
+ * Uses environment variable by default, DB keys for rotation/fallback
  * 
  * @param provider - The AI provider (default: 'nvidia')
+ * @param useDbKeys - Force using DB keys (for rotation after rate limit)
  * @returns The API key and its ID (for marking as rate limited later)
  */
-export async function getAvailableApiKey(provider: string = 'nvidia'): Promise<AvailableKey> {
+export async function getAvailableApiKey(provider: string = 'nvidia', useDbKeys: boolean = false): Promise<AvailableKey> {
     try {
+        const envKey = process.env.NVIDIA_API_KEY || '';
+
+        // By default, use environment variable first
+        if (!useDbKeys && envKey && !isEnvKeyOnCooldown()) {
+            console.log('[APIKeyRotation] Using environment variable API key');
+            return {
+                apiKey: envKey,
+                keyId: 'env', // Special ID to track env key
+            };
+        }
+
         const now = Date.now();
 
         // Refresh cache if expired
@@ -52,9 +81,10 @@ export async function getAvailableApiKey(provider: string = 'nvidia'): Promise<A
         const availableKeys = keyCache.filter(key => key.provider === provider);
 
         if (availableKeys.length === 0) {
-            console.log('[APIKeyRotation] No DB keys available, using environment variable');
+            // No DB keys available, try env key as last resort even if on cooldown
+            console.log('[APIKeyRotation] No DB keys available, using environment variable as last resort');
             return {
-                apiKey: process.env.NVIDIA_API_KEY || '',
+                apiKey: envKey,
                 keyId: null,
             };
         }
@@ -65,7 +95,7 @@ export async function getAvailableApiKey(provider: string = 'nvidia'): Promise<A
         lastUsedKeyIndex = (lastUsedKeyIndex + 1) % weightedKeys.length;
         const selectedKey = weightedKeys[lastUsedKeyIndex];
 
-        console.log(`[APIKeyRotation] Using key ${selectedKey.id.substring(0, 8)}... (priority: ${selectedKey.priority})`);
+        console.log(`[APIKeyRotation] Using DB key ${selectedKey.id.substring(0, 8)}... (priority: ${selectedKey.priority})`);
 
         // Increment daily counter (fire and forget)
         incrementDailyCounter(selectedKey.id).catch(err => {
@@ -137,12 +167,18 @@ function getWeightedKeys(keys: CachedKey[]): CachedKey[] {
 /**
  * Mark a key as rate limited and put it on cooldown
  * 
- * @param keyId - The key ID to mark
+ * @param keyId - The key ID to mark ('env' for environment key, null for fallback)
  * @param cooldownSeconds - How long to wait before using this key again
  */
 export async function markKeyRateLimited(keyId: string | null, cooldownSeconds: number = 60): Promise<void> {
+    // Handle environment key
+    if (keyId === 'env') {
+        setEnvKeyCooldown(cooldownSeconds);
+        return;
+    }
+
     if (!keyId) {
-        console.log('[APIKeyRotation] Cannot mark env key as rate limited');
+        console.log('[APIKeyRotation] Cannot mark fallback key as rate limited');
         return;
     }
 
@@ -179,7 +215,7 @@ export async function markKeyRateLimited(keyId: string | null, cooldownSeconds: 
         // Remove from cache immediately
         keyCache = keyCache.filter(k => k.id !== keyId);
 
-        console.log(`[APIKeyRotation] Key ${keyId.substring(0, 8)}... on cooldown for ${cooldownSeconds}s`);
+        console.log(`[APIKeyRotation] DB key ${keyId.substring(0, 8)}... on cooldown for ${cooldownSeconds}s`);
     } catch (error) {
         console.error('[APIKeyRotation] Error in markKeyRateLimited:', error);
     }

@@ -58,6 +58,10 @@ export async function PUT(
             billing_interval,
             thumbnail_url,
             creator_name,
+            notification_title,
+            notification_greeting,
+            notification_button_text,
+            notification_button_url,
             media // Optional: if provided, replace all media
         } = body;
 
@@ -78,6 +82,10 @@ export async function PUT(
         if (billing_interval !== undefined) updateData.billing_interval = billing_interval;
         if (thumbnail_url !== undefined) updateData.thumbnail_url = thumbnail_url;
         if (creator_name !== undefined) updateData.creator_name = creator_name || null;
+        if (notification_title !== undefined) updateData.notification_title = notification_title || null;
+        if (notification_greeting !== undefined) updateData.notification_greeting = notification_greeting || null;
+        if (notification_button_text !== undefined) updateData.notification_button_text = notification_button_text || null;
+        if (notification_button_url !== undefined) updateData.notification_button_url = notification_button_url || null;
 
         const { error: updateError } = await supabase
             .from('digital_products')

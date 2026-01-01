@@ -11,7 +11,9 @@ import {
     Trash2,
     GripVertical,
     ExternalLink,
-    FileText
+    FileText,
+    Bell,
+    Link
 } from 'lucide-react';
 
 interface ProductCategory {
@@ -28,7 +30,7 @@ interface Form {
 
 interface MediaItem {
     id?: string;
-    media_type: 'image' | 'video';
+    media_type: 'image' | 'video' | 'video_link';
     media_url: string;
     thumbnail_url?: string | null;
     isNew?: boolean;
@@ -50,6 +52,10 @@ interface DigitalProduct {
     billing_interval: 'monthly' | 'yearly';
     thumbnail_url: string | null;
     creator_name: string | null;
+    notification_title: string | null;
+    notification_greeting: string | null;
+    notification_button_text: string | null;
+    notification_button_url: string | null;
     media?: MediaItem[];
 }
 
@@ -87,9 +93,65 @@ export default function DigitalProductFormModal({
     const [creatorName, setCreatorName] = useState('');
     const [media, setMedia] = useState<MediaItem[]>([]);
 
+    // Notification settings
+    const [notificationTitle, setNotificationTitle] = useState('');
+    const [notificationGreeting, setNotificationGreeting] = useState('');
+    const [notificationButtonText, setNotificationButtonText] = useState('');
+    const [notificationButtonUrl, setNotificationButtonUrl] = useState('');
+
     const [forms, setForms] = useState<Form[]>([]);
     const [uploading, setUploading] = useState(false);
     const [saving, setSaving] = useState(false);
+
+    // Video link modal state
+    const [showVideoLinkInput, setShowVideoLinkInput] = useState(false);
+    const [videoLinkUrl, setVideoLinkUrl] = useState('');
+    const [addingVideoLink, setAddingVideoLink] = useState(false);
+
+    // Helper function to extract video info from URL
+    const getVideoInfoFromUrl = (url: string): { type: 'youtube' | 'vimeo' | 'loom' | 'other'; videoId: string | null; thumbnailUrl: string | null } => {
+        // YouTube patterns
+        const youtubePatterns = [
+            /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+            /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/
+        ];
+        for (const pattern of youtubePatterns) {
+            const match = url.match(pattern);
+            if (match) {
+                const videoId = match[1];
+                return {
+                    type: 'youtube',
+                    videoId,
+                    thumbnailUrl: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`
+                };
+            }
+        }
+
+        // Vimeo pattern
+        const vimeoPattern = /vimeo\.com\/(\d+)/;
+        const vimeoMatch = url.match(vimeoPattern);
+        if (vimeoMatch) {
+            return {
+                type: 'vimeo',
+                videoId: vimeoMatch[1],
+                thumbnailUrl: null // Vimeo requires API call for thumbnails
+            };
+        }
+
+        // Loom pattern
+        const loomPattern = /loom\.com\/share\/([a-zA-Z0-9]+)/;
+        const loomMatch = url.match(loomPattern);
+        if (loomMatch) {
+            const videoId = loomMatch[1];
+            return {
+                type: 'loom',
+                videoId,
+                thumbnailUrl: `https://cdn.loom.com/sessions/thumbnails/${videoId}-with-play.gif`
+            };
+        }
+
+        return { type: 'other', videoId: null, thumbnailUrl: null };
+    };
 
     // Fetch available forms
     useEffect(() => {
@@ -124,6 +186,10 @@ export default function DigitalProductFormModal({
             setThumbnailUrl(editingProduct.thumbnail_url || null);
             setCreatorName(editingProduct.creator_name || '');
             setMedia(editingProduct.media || []);
+            setNotificationTitle(editingProduct.notification_title || '');
+            setNotificationGreeting(editingProduct.notification_greeting || '');
+            setNotificationButtonText(editingProduct.notification_button_text || '');
+            setNotificationButtonUrl(editingProduct.notification_button_url || '');
         } else {
             resetForm();
         }
@@ -144,6 +210,10 @@ export default function DigitalProductFormModal({
         setThumbnailUrl(null);
         setCreatorName('');
         setMedia([]);
+        setNotificationTitle('');
+        setNotificationGreeting('');
+        setNotificationButtonText('');
+        setNotificationButtonUrl('');
     };
 
     const handleThumbnailUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -219,6 +289,37 @@ export default function DigitalProductFormModal({
         setMedia(prev => prev.filter((_, i) => i !== index));
     };
 
+    const handleAddVideoLink = () => {
+        if (!videoLinkUrl.trim()) {
+            alert('Please enter a video URL');
+            return;
+        }
+
+        // Basic URL validation
+        try {
+            new URL(videoLinkUrl);
+        } catch {
+            alert('Please enter a valid URL');
+            return;
+        }
+
+        setAddingVideoLink(true);
+
+        const videoInfo = getVideoInfoFromUrl(videoLinkUrl);
+
+        const newMediaItem: MediaItem = {
+            media_type: 'video_link',
+            media_url: videoLinkUrl.trim(),
+            thumbnail_url: videoInfo.thumbnailUrl,
+            isNew: true
+        };
+
+        setMedia(prev => [...prev, newMediaItem]);
+        setVideoLinkUrl('');
+        setShowVideoLinkInput(false);
+        setAddingVideoLink(false);
+    };
+
     const handleSubmit = async () => {
         if (!title.trim()) {
             alert('Title is required');
@@ -243,6 +344,10 @@ export default function DigitalProductFormModal({
                 billing_interval: billingInterval,
                 thumbnail_url: thumbnailUrl,
                 creator_name: creatorName.trim() || null,
+                notification_title: notificationTitle.trim() || null,
+                notification_greeting: notificationGreeting.trim() || null,
+                notification_button_text: notificationButtonText.trim() || null,
+                notification_button_url: notificationButtonUrl.trim() || null,
                 media: media.map(m => ({
                     media_type: m.media_type,
                     media_url: m.media_url,
@@ -406,14 +511,30 @@ export default function DigitalProductFormModal({
                                                 key={index}
                                                 className={`relative aspect-video bg-gray-100 rounded-xl overflow-hidden group ${index === 0 ? 'ring-2 ring-emerald-500 ring-offset-2' : ''}`}
                                             >
-                                                <img
-                                                    src={item.thumbnail_url || item.media_url}
-                                                    alt=""
-                                                    className="w-full h-full object-cover"
-                                                />
-                                                {item.media_type === 'video' && (
+                                                {item.thumbnail_url ? (
+                                                    <img
+                                                        src={item.thumbnail_url}
+                                                        alt=""
+                                                        className="w-full h-full object-cover"
+                                                    />
+                                                ) : item.media_type === 'video_link' ? (
+                                                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-700 to-gray-900">
+                                                        <Link className="w-8 h-8 text-white/60" />
+                                                    </div>
+                                                ) : (
+                                                    <img
+                                                        src={item.media_url}
+                                                        alt=""
+                                                        className="w-full h-full object-cover"
+                                                    />
+                                                )}
+                                                {(item.media_type === 'video' || item.media_type === 'video_link') && (
                                                     <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-                                                        <Video className="w-6 h-6 text-white" />
+                                                        {item.media_type === 'video_link' ? (
+                                                            <Link className="w-6 h-6 text-white" />
+                                                        ) : (
+                                                            <Video className="w-6 h-6 text-white" />
+                                                        )}
                                                     </div>
                                                 )}
                                                 <button
@@ -427,37 +548,109 @@ export default function DigitalProductFormModal({
                                                         PRIMARY
                                                     </div>
                                                 )}
+                                                {item.media_type === 'video_link' && (
+                                                    <div className="absolute bottom-1 left-1 px-1.5 py-0.5 bg-blue-500 text-white text-[10px] font-bold rounded">
+                                                        LINK
+                                                    </div>
+                                                )}
                                             </div>
                                         ))}
                                     </div>
                                 )}
 
-                                <label className="flex flex-col items-center justify-center py-6 cursor-pointer hover:bg-gray-100 rounded-xl transition-colors">
-                                    <input
-                                        ref={fileInputRef}
-                                        type="file"
-                                        accept="image/*,video/*"
-                                        multiple
-                                        onChange={handleMediaUpload}
-                                        className="hidden"
-                                    />
-                                    {uploading ? (
-                                        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
-                                    ) : (
-                                        <>
-                                            <div className="flex gap-2 mb-2">
-                                                <ImageIcon className="w-6 h-6 text-gray-400" />
-                                                <Video className="w-6 h-6 text-gray-400" />
-                                            </div>
-                                            <span className="text-sm text-gray-600 font-medium">
-                                                Click to upload images or videos
-                                            </span>
-                                            <span className="text-xs text-gray-400 mt-1">
-                                                First item will be the main banner
-                                            </span>
-                                        </>
-                                    )}
-                                </label>
+                                {/* Video Link Input */}
+                                {showVideoLinkInput && (
+                                    <div className="mb-4 p-4 bg-white rounded-xl border border-gray-200">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Video URL (YouTube, Loom, Vimeo)
+                                        </label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="url"
+                                                value={videoLinkUrl}
+                                                onChange={e => setVideoLinkUrl(e.target.value)}
+                                                placeholder="https://youtube.com/watch?v=... or https://www.loom.com/share/..."
+                                                className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-lg transition-all text-gray-900 placeholder:text-gray-400 font-medium text-sm"
+                                                onKeyDown={e => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        handleAddVideoLink();
+                                                    }
+                                                }}
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={handleAddVideoLink}
+                                                disabled={addingVideoLink}
+                                                className="px-4 py-2.5 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors font-medium text-sm disabled:opacity-50"
+                                            >
+                                                {addingVideoLink ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Add'}
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setShowVideoLinkInput(false);
+                                                    setVideoLinkUrl('');
+                                                }}
+                                                className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors font-medium text-sm"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                        <p className="text-xs text-gray-400 mt-2">
+                                            Supports YouTube, Loom, and Vimeo links
+                                        </p>
+                                    </div>
+                                )}
+
+                                {/* Upload and Add Link Actions */}
+                                <div className="flex gap-3">
+                                    <label className="flex-1 flex flex-col items-center justify-center py-6 cursor-pointer hover:bg-gray-100 rounded-xl transition-colors border border-transparent hover:border-gray-200">
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            accept="image/*,video/*"
+                                            multiple
+                                            onChange={handleMediaUpload}
+                                            className="hidden"
+                                        />
+                                        {uploading ? (
+                                            <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+                                        ) : (
+                                            <>
+                                                <div className="flex gap-2 mb-2">
+                                                    <ImageIcon className="w-6 h-6 text-gray-400" />
+                                                    <Video className="w-6 h-6 text-gray-400" />
+                                                </div>
+                                                <span className="text-sm text-gray-600 font-medium">
+                                                    Upload files
+                                                </span>
+                                                <span className="text-xs text-gray-400 mt-1">
+                                                    Images or videos
+                                                </span>
+                                            </>
+                                        )}
+                                    </label>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowVideoLinkInput(true)}
+                                        className="flex-1 flex flex-col items-center justify-center py-6 cursor-pointer hover:bg-blue-50 rounded-xl transition-colors border border-transparent hover:border-blue-200"
+                                        disabled={showVideoLinkInput}
+                                    >
+                                        <Link className="w-6 h-6 text-blue-400 mb-2" />
+                                        <span className="text-sm text-gray-600 font-medium">
+                                            Add video link
+                                        </span>
+                                        <span className="text-xs text-gray-400 mt-1">
+                                            YouTube, Loom, Vimeo
+                                        </span>
+                                    </button>
+                                </div>
+
+                                <p className="text-xs text-gray-400 mt-3 text-center">
+                                    First item will be the main banner
+                                </p>
                             </div>
                         </div>
                     </section>
@@ -616,6 +809,81 @@ export default function DigitalProductFormModal({
                                 </div>
                                 <p className="text-xs text-gray-400 mt-1">Leave empty for lifetime access</p>
                             </div>
+                        </div>
+                    </section>
+
+                    {/* Notification Settings */}
+                    <section className="bg-white rounded-3xl p-8 border border-gray-100 shadow-sm mb-8">
+                        <div className="flex items-center gap-3 mb-6">
+                            <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center">
+                                <Bell className="w-5 h-5 text-emerald-600" />
+                            </div>
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-900">Notification Settings</h3>
+                                <p className="text-sm text-gray-500">Message sent to customers after purchase</p>
+                            </div>
+                        </div>
+
+                        <div className="space-y-6">
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                    Notification Title
+                                    <span className="text-xs text-gray-400 ml-2">(optional)</span>
+                                </label>
+                                <input
+                                    type="text"
+                                    value={notificationTitle}
+                                    onChange={e => setNotificationTitle(e.target.value)}
+                                    placeholder="e.g., Thank You for Your Purchase! 🎉"
+                                    className="w-full px-5 py-3.5 bg-gray-50 border-transparent focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-xl transition-all text-gray-900 placeholder:text-gray-400 font-medium"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                    Greeting Message
+                                    <span className="text-xs text-gray-400 ml-2">(optional)</span>
+                                </label>
+                                <textarea
+                                    value={notificationGreeting}
+                                    onChange={e => setNotificationGreeting(e.target.value)}
+                                    placeholder="e.g., Thank you for purchasing [Product Name]! Your order has been received and is being processed."
+                                    rows={3}
+                                    className="w-full px-5 py-3.5 bg-gray-50 border-transparent focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-xl transition-all text-gray-900 placeholder:text-gray-400 font-medium resize-none"
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-6">
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        Button Text
+                                        <span className="text-xs text-gray-400 ml-2">(optional)</span>
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={notificationButtonText}
+                                        onChange={e => setNotificationButtonText(e.target.value)}
+                                        placeholder="e.g., View Order Details"
+                                        className="w-full px-5 py-3.5 bg-gray-50 border-transparent focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-xl transition-all text-gray-900 placeholder:text-gray-400 font-medium"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        Button URL
+                                        <span className="text-xs text-gray-400 ml-2">(optional)</span>
+                                    </label>
+                                    <input
+                                        type="url"
+                                        value={notificationButtonUrl}
+                                        onChange={e => setNotificationButtonUrl(e.target.value)}
+                                        placeholder="https://..."
+                                        className="w-full px-5 py-3.5 bg-gray-50 border-transparent focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-xl transition-all text-gray-900 placeholder:text-gray-400 font-medium"
+                                    />
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-400">
+                                Leave empty to use default notification. Button only appears if both text and URL are provided.
+                            </p>
                         </div>
                     </section>
                 </div>

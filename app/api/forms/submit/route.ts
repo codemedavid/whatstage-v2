@@ -191,10 +191,10 @@ export async function POST(request: Request) {
         // 5. If this is a digital product checkout, create a purchase record
         if (digital_product_id && submission) {
             try {
-                // Fetch digital product details for price
+                // Fetch digital product details for price and notification settings
                 const { data: digitalProduct } = await supabase
                     .from('digital_products')
-                    .select('price, access_duration_days')
+                    .select('title, price, access_duration_days, notification_title, notification_greeting, notification_button_text, notification_button_url')
                     .eq('id', digital_product_id)
                     .single();
 
@@ -231,6 +231,60 @@ export async function POST(request: Request) {
                                 );
                             } catch (workflowError) {
                                 console.error('[FormSubmit] Error triggering digital product workflows:', workflowError);
+                            }
+
+                            // Send Messenger notification if user_id (PSID) is available
+                            if (user_id && digitalProduct) {
+                                try {
+                                    // Get lead's page_id to ensure we can send message
+                                    const { data: lead } = await supabase
+                                        .from('leads')
+                                        .select('page_id')
+                                        .eq('id', leadId)
+                                        .single();
+
+                                    if (lead?.page_id) {
+                                        const { callSendAPI } = await import('@/app/api/webhook/facebookClient');
+
+                                        // Build notification message
+                                        const notificationTitle = digitalProduct.notification_title || `🎉 Thank You for Your Purchase!`;
+                                        const notificationGreeting = digitalProduct.notification_greeting ||
+                                            `Thank you for purchasing "${digitalProduct.title}"! Your order has been received and is being processed.`;
+
+                                        const hasButton = digitalProduct.notification_button_text && digitalProduct.notification_button_url;
+
+                                        if (hasButton) {
+                                            // Send as button template
+                                            await callSendAPI(user_id, {
+                                                attachment: {
+                                                    type: 'template',
+                                                    payload: {
+                                                        template_type: 'button',
+                                                        text: `${notificationTitle}\n\n${notificationGreeting}`,
+                                                        buttons: [
+                                                            {
+                                                                type: 'web_url',
+                                                                url: digitalProduct.notification_button_url,
+                                                                title: digitalProduct.notification_button_text,
+                                                                webview_height_ratio: 'tall'
+                                                            }
+                                                        ]
+                                                    }
+                                                }
+                                            }, lead.page_id);
+                                        } else {
+                                            // Send as plain text
+                                            await callSendAPI(user_id, {
+                                                text: `${notificationTitle}\n\n${notificationGreeting}`
+                                            }, lead.page_id);
+                                        }
+
+                                        console.log(`[FormSubmit] Sent digital product purchase notification to PSID: ${user_id}`);
+                                    }
+                                } catch (notificationError) {
+                                    console.error('[FormSubmit] Error sending purchase notification:', notificationError);
+                                    // Don't fail the submission if notification fails
+                                }
                             }
                         }
                     });

@@ -1845,3 +1845,26 @@ CREATE INDEX IF NOT EXISTS idx_form_file_uploads_field ON form_file_uploads(fiel
 COMMENT ON COLUMN form_fields.step_number IS 'Step number for multi-step forms (1-based)';
 COMMENT ON COLUMN forms.page_id IS 'Optional Facebook page ID for Messenger redirect after submission';
 COMMENT ON TABLE form_file_uploads IS 'Stores uploaded files from form submissions (e.g., payment screenshots)';
+
+
+-- ============================================================================
+-- DIGITAL PRODUCTS - NOTIFICATION SETTINGS
+-- ============================================================================
+
+ALTER TABLE digital_products 
+ADD COLUMN IF NOT EXISTS notification_title TEXT;
+
+ALTER TABLE digital_products 
+ADD COLUMN IF NOT EXISTS notification_greeting TEXT;
+
+ALTER TABLE digital_products 
+ADD COLUMN IF NOT EXISTS notification_button_text TEXT;
+
+ALTER TABLE digital_products 
+ADD COLUMN IF NOT EXISTS notification_button_url TEXT;
+
+COMMENT ON COLUMN digital_products.notification_title IS 'Title for the purchase confirmation notification in Messenger';
+COMMENT ON COLUMN digital_products.notification_greeting IS 'Greeting message sent after purchase completion';
+COMMENT ON COLUMN digital_products.notification_button_text IS 'Optional CTA button text for the notification';
+COMMENT ON COLUMN digital_products.notification_button_url IS 'Optional CTA button URL for the notification';
+
