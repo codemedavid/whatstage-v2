@@ -243,7 +243,19 @@ export async function POST(request: Request) {
                                         .eq('id', leadId)
                                         .single();
 
-                                    if (lead?.page_id) {
+                                    // Fallback to bot_settings page_id if lead doesn't have one
+                                    let pageId = lead?.page_id;
+                                    if (!pageId) {
+                                        const { data: botSettings } = await supabase
+                                            .from('bot_settings')
+                                            .select('page_id')
+                                            .limit(1)
+                                            .single();
+                                        pageId = botSettings?.page_id || null;
+                                        console.log(`[FormSubmit] Lead has no page_id, using bot_settings page_id: ${pageId}`);
+                                    }
+
+                                    if (pageId) {
                                         const { callSendAPI } = await import('@/app/api/webhook/facebookClient');
 
                                         // Build notification message
@@ -271,15 +283,17 @@ export async function POST(request: Request) {
                                                         ]
                                                     }
                                                 }
-                                            }, lead.page_id);
+                                            }, pageId);
                                         } else {
                                             // Send as plain text
                                             await callSendAPI(user_id, {
                                                 text: `${notificationTitle}\n\n${notificationGreeting}`
-                                            }, lead.page_id);
+                                            }, pageId);
                                         }
 
                                         console.log(`[FormSubmit] Sent digital product purchase notification to PSID: ${user_id}`);
+                                    } else {
+                                        console.log(`[FormSubmit] Cannot send notification - no page_id available for lead ${leadId}`);
                                     }
                                 } catch (notificationError) {
                                     console.error('[FormSubmit] Error sending purchase notification:', notificationError);

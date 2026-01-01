@@ -532,8 +532,56 @@ export default function DigitalProductClient({ product: initialProduct, initialF
                         {/* Description Section */}
                         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-6 md:p-8">
                             <h2 className="text-xl font-bold text-gray-900 mb-4">About this product</h2>
-                            <div className="prose prose-gray max-w-none text-gray-600 leading-relaxed whitespace-pre-wrap">
-                                {product.description || "No description provided."}
+                            <div className="prose prose-gray max-w-none text-gray-600 leading-relaxed">
+                                {product.description ? (
+                                    (() => {
+                                        const lines = product.description.split('\n');
+                                        const elements: React.ReactNode[] = [];
+                                        let currentListItems: string[] = [];
+                                        let key = 0;
+
+                                        const flushList = () => {
+                                            if (currentListItems.length > 0) {
+                                                elements.push(
+                                                    <ul key={key++} className="list-disc list-inside space-y-1.5 my-3">
+                                                        {currentListItems.map((item, idx) => (
+                                                            <li key={idx} className="text-gray-600">{item}</li>
+                                                        ))}
+                                                    </ul>
+                                                );
+                                                currentListItems = [];
+                                            }
+                                        };
+
+                                        lines.forEach((line, idx) => {
+                                            const trimmedLine = line.trim();
+                                            // Check if line starts with bullet point markers
+                                            const bulletMatch = trimmedLine.match(/^[-•*]\s*(.+)$/);
+
+                                            if (bulletMatch) {
+                                                currentListItems.push(bulletMatch[1]);
+                                            } else {
+                                                flushList();
+                                                if (trimmedLine === '') {
+                                                    // Empty line - add spacing
+                                                    elements.push(<div key={key++} className="h-3" />);
+                                                } else {
+                                                    // Regular text line
+                                                    elements.push(
+                                                        <p key={key++} className="text-gray-600" style={{ whiteSpace: 'pre-wrap' }}>
+                                                            {line}
+                                                        </p>
+                                                    );
+                                                }
+                                            }
+                                        });
+
+                                        flushList(); // Flush any remaining list items
+                                        return elements;
+                                    })()
+                                ) : (
+                                    <p className="text-gray-400 italic">No description provided.</p>
+                                )}
                             </div>
                         </div>
                     </div>

@@ -425,10 +425,17 @@ export default function DigitalProductFormModal({
                                 <textarea
                                     value={description}
                                     onChange={e => setDescription(e.target.value)}
-                                    placeholder="Detailed description, what's included, benefits..."
-                                    rows={4}
-                                    className="w-full px-5 py-3.5 bg-gray-50 border-transparent focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-xl transition-all text-gray-900 placeholder:text-gray-400 font-medium resize-none"
+                                    placeholder="Detailed description, what's included, benefits...
+
+• Use bullet points with - or •
+• Each line break is preserved
+• Add sections with blank lines"
+                                    rows={8}
+                                    className="w-full px-5 py-3.5 bg-gray-50 border-transparent focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-xl transition-all text-gray-900 placeholder:text-gray-400 font-medium resize-y"
                                 />
+                                <p className="text-xs text-gray-400 mt-1.5">
+                                    Tip: Use - or • at the start of a line for bullet points. Line breaks will be preserved.
+                                </p>
                             </div>
 
                             <div>

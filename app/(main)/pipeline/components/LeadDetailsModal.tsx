@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Calendar, ShoppingCart, Activity, Phone, Mail, MessageCircle, Clock, CheckCircle, AlertCircle, User, CreditCard, ShoppingBag, FileText, Brain, Bot, UserX, Play } from 'lucide-react';
+import { X, Calendar, ShoppingCart, Activity, Phone, Mail, MessageCircle, Clock, CheckCircle, AlertCircle, User, CreditCard, ShoppingBag, FileText, Brain, Bot, UserX, Play, Home, Package, Smartphone, Send, Loader2 } from 'lucide-react';
 import MemoryTab from './MemoryTab';
 import ResponseFeedback from '@/app/components/ResponseFeedback';
 
@@ -29,6 +29,7 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
     const [conversations, setConversations] = useState<any[]>([]);
     const [takeoverActive, setTakeoverActive] = useState(false);
     const [takeoverLoading, setTakeoverLoading] = useState(false);
+    const [cardSending, setCardSending] = useState<string | null>(null); // Track which card type is being sent
 
     // Start human takeover - pauses the bot for this lead
     const handleStartTakeover = async () => {
@@ -70,7 +71,34 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
         }
     };
 
+    // Send a card to the customer
+    const handleSendCard = async (cardType: 'products' | 'properties' | 'digital_products' | 'booking' | 'payment_methods') => {
+        if (!data?.lead?.sender_id) return;
+        setCardSending(cardType);
+        try {
+            const res = await fetch('/api/leads/send-card', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ senderId: data.lead.sender_id, cardType }),
+            });
+            const result = await res.json();
+            if (res.ok) {
+                setTakeoverActive(true); // Card sending also activates takeover
+                console.log('Card sent:', result.message);
+            } else {
+                console.error('Failed to send card:', result.error);
+                alert(result.error || 'Failed to send card');
+            }
+        } catch (error) {
+            console.error('Failed to send card:', error);
+            alert('Failed to send card');
+        } finally {
+            setCardSending(null);
+        }
+    };
+
     useEffect(() => {
+
         if (isOpen && leadId) {
             fetchDetails();
         } else {
@@ -524,9 +552,9 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
                                                                     </div>
                                                                     <div className="flex items-center gap-4">
                                                                         <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${digitalOrder.status === 'active' ? 'bg-green-100 text-green-700' :
-                                                                                digitalOrder.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                                                                                    digitalOrder.status === 'cancelled' ? 'bg-red-100 text-red-700' :
-                                                                                        'bg-gray-100 text-gray-700'
+                                                                            digitalOrder.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                                                                                digitalOrder.status === 'cancelled' ? 'bg-red-100 text-red-700' :
+                                                                                    'bg-gray-100 text-gray-700'
                                                                             }`}>
                                                                             {digitalOrder.status}
                                                                         </span>
@@ -601,7 +629,89 @@ export default function LeadDetailsModal({ isOpen, onClose, leadId, initialLeadD
 
                                     {activeTab === 'conversation' && (
                                         <div className="space-y-4">
-                                            <h3 className="text-lg font-bold text-gray-900 mb-4">Conversation History</h3>
+                                            <div className="flex items-center justify-between mb-4">
+                                                <h3 className="text-lg font-bold text-gray-900">Conversation History</h3>
+                                            </div>
+
+                                            {/* Card Trigger Toolbar */}
+                                            <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-4 border border-gray-200">
+                                                <div className="flex items-center justify-between mb-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <Send size={16} className="text-gray-500" />
+                                                        <span className="text-sm font-bold text-gray-700">Send Cards to Customer</span>
+                                                    </div>
+                                                    {takeoverActive && (
+                                                        <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full font-medium">
+                                                            Takeover Active
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="grid grid-cols-5 gap-2">
+                                                    <button
+                                                        onClick={() => handleSendCard('products')}
+                                                        disabled={cardSending !== null}
+                                                        className="flex flex-col items-center gap-1.5 p-3 bg-white rounded-xl border border-gray-200 hover:border-emerald-300 hover:bg-emerald-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                                                    >
+                                                        {cardSending === 'products' ? (
+                                                            <Loader2 size={20} className="text-emerald-600 animate-spin" />
+                                                        ) : (
+                                                            <Package size={20} className="text-gray-500 group-hover:text-emerald-600 transition-colors" />
+                                                        )}
+                                                        <span className="text-xs font-medium text-gray-600 group-hover:text-emerald-700">Products</span>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleSendCard('properties')}
+                                                        disabled={cardSending !== null}
+                                                        className="flex flex-col items-center gap-1.5 p-3 bg-white rounded-xl border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                                                    >
+                                                        {cardSending === 'properties' ? (
+                                                            <Loader2 size={20} className="text-blue-600 animate-spin" />
+                                                        ) : (
+                                                            <Home size={20} className="text-gray-500 group-hover:text-blue-600 transition-colors" />
+                                                        )}
+                                                        <span className="text-xs font-medium text-gray-600 group-hover:text-blue-700">Properties</span>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleSendCard('digital_products')}
+                                                        disabled={cardSending !== null}
+                                                        className="flex flex-col items-center gap-1.5 p-3 bg-white rounded-xl border border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                                                    >
+                                                        {cardSending === 'digital_products' ? (
+                                                            <Loader2 size={20} className="text-purple-600 animate-spin" />
+                                                        ) : (
+                                                            <Smartphone size={20} className="text-gray-500 group-hover:text-purple-600 transition-colors" />
+                                                        )}
+                                                        <span className="text-xs font-medium text-gray-600 group-hover:text-purple-700">Digital</span>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleSendCard('booking')}
+                                                        disabled={cardSending !== null}
+                                                        className="flex flex-col items-center gap-1.5 p-3 bg-white rounded-xl border border-gray-200 hover:border-teal-300 hover:bg-teal-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                                                    >
+                                                        {cardSending === 'booking' ? (
+                                                            <Loader2 size={20} className="text-teal-600 animate-spin" />
+                                                        ) : (
+                                                            <Calendar size={20} className="text-gray-500 group-hover:text-teal-600 transition-colors" />
+                                                        )}
+                                                        <span className="text-xs font-medium text-gray-600 group-hover:text-teal-700">Booking</span>
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleSendCard('payment_methods')}
+                                                        disabled={cardSending !== null}
+                                                        className="flex flex-col items-center gap-1.5 p-3 bg-white rounded-xl border border-gray-200 hover:border-amber-300 hover:bg-amber-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
+                                                    >
+                                                        {cardSending === 'payment_methods' ? (
+                                                            <Loader2 size={20} className="text-amber-600 animate-spin" />
+                                                        ) : (
+                                                            <CreditCard size={20} className="text-gray-500 group-hover:text-amber-600 transition-colors" />
+                                                        )}
+                                                        <span className="text-xs font-medium text-gray-600 group-hover:text-amber-700">Payment</span>
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-gray-400 mt-2 text-center">
+                                                    Click to send interactive cards directly to customer's Messenger
+                                                </p>
+                                            </div>
 
                                             {conversations.length === 0 ? (
                                                 <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-gray-200">

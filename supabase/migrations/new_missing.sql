@@ -447,6 +447,56 @@ COMMENT ON COLUMN digital_products.notification_button_url IS 'Optional CTA butt
 
 
 -- ============================================================================
+-- BOT SETTINGS - MISSING COLUMNS
+-- ============================================================================
+
+-- Add primary_goal column to bot_settings table
+ALTER TABLE bot_settings 
+ADD COLUMN IF NOT EXISTS primary_goal TEXT DEFAULT 'lead_generation';
+
+-- Add CHECK constraint for primary_goal
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.constraint_column_usage 
+    WHERE table_name = 'bot_settings' 
+    AND constraint_name = 'bot_settings_primary_goal_check'
+  ) THEN
+    ALTER TABLE bot_settings 
+    ADD CONSTRAINT bot_settings_primary_goal_check 
+    CHECK (primary_goal IN ('lead_generation', 'appointment_booking', 'tripping', 'purchase'));
+  END IF;
+END $$;
+
+COMMENT ON COLUMN bot_settings.primary_goal IS 'Primary bot objective: lead_generation, appointment_booking, tripping (real estate), or purchase (e-commerce)';
+
+-- Add auto_follow_up_enabled column to bot_settings table
+ALTER TABLE bot_settings 
+ADD COLUMN IF NOT EXISTS auto_follow_up_enabled BOOLEAN DEFAULT false;
+
+COMMENT ON COLUMN bot_settings.auto_follow_up_enabled IS 'When true, the bot will automatically send follow-up messages to inactive leads';
+
+-- Add ai_model column to bot_settings table
+ALTER TABLE bot_settings
+ADD COLUMN IF NOT EXISTS ai_model TEXT DEFAULT 'qwen/qwen3-235b-a22b';
+
+COMMENT ON COLUMN bot_settings.ai_model IS 'AI model to use for chat completions (e.g., qwen/qwen3-235b-a22b, deepseek-ai/deepseek-v3.1)';
+
+-- Update existing rows to have default values
+UPDATE bot_settings 
+SET primary_goal = 'lead_generation' 
+WHERE primary_goal IS NULL;
+
+UPDATE bot_settings 
+SET auto_follow_up_enabled = false 
+WHERE auto_follow_up_enabled IS NULL;
+
+UPDATE bot_settings 
+SET ai_model = 'qwen/qwen3-235b-a22b' 
+WHERE ai_model IS NULL;
+
+
+-- ============================================================================
 -- END OF NEW MISSING MIGRATIONS
 -- ============================================================================
 
