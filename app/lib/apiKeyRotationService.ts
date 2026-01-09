@@ -9,7 +9,9 @@
  * - Daily request tracking per key
  */
 
+import { createHash } from 'crypto';
 import { supabase } from './supabase';
+import { getUserApiKeyForUser } from './userBotConfigService';
 
 // In-memory cache for available keys to reduce DB calls
 interface CachedKey {
@@ -29,6 +31,29 @@ let lastUsedKeyIndex = -1;
 // Track env key cooldown (in-memory since no DB record)
 let envKeyCooldownUntil: number = 0;
 
+// Track user key cooldowns (in-memory since tracked per-user without DB updates)
+const userKeyCooldowns = new Map<string, number>();
+
+/**
+ * Generate a one-way hash token from userId for safe logging (no PII)
+ */
+function hashUserIdForLogging(userId: string): string {
+    return createHash('sha256').update(userId).digest('hex').substring(0, 8);
+}
+
+/**
+ * Cleanup stale entries from userKeyCooldowns Map to prevent memory leak
+ */
+function cleanupStaleUserCooldowns(): void {
+    const now = Date.now();
+    // Use Array.from() for TypeScript compatibility with Map iteration
+    Array.from(userKeyCooldowns.entries()).forEach(([userId, cooldownUntil]) => {
+        if (cooldownUntil <= now) {
+            userKeyCooldowns.delete(userId);
+        }
+    });
+}
+
 /**
  * Check if the environment key is currently on cooldown
  */
@@ -44,32 +69,70 @@ function setEnvKeyCooldown(cooldownSeconds: number): void {
     console.log(`[APIKeyRotation] Env key on cooldown for ${cooldownSeconds}s`);
 }
 
+/**
+ * Check if a user's key is currently on cooldown
+ */
+function isUserKeyOnCooldown(userId: string): boolean {
+    // Lazy cleanup: remove stale entries before checking
+    cleanupStaleUserCooldowns();
+    const cooldownUntil = userKeyCooldowns.get(userId);
+    if (!cooldownUntil) return false;
+    return Date.now() < cooldownUntil;
+}
+
+/**
+ * Put a user's dedicated key on cooldown
+ */
+function setUserKeyCooldown(userId: string, cooldownSeconds: number): void {
+    // Lazy cleanup: remove stale entries before adding
+    cleanupStaleUserCooldowns();
+    userKeyCooldowns.set(userId, Date.now() + cooldownSeconds * 1000);
+    // Log with hashed token to avoid exposing PII
+    const hashedToken = hashUserIdForLogging(userId);
+    console.log(`[APIKeyRotation] User key [${hashedToken}] on cooldown for ${cooldownSeconds}s`);
+}
+
 export interface AvailableKey {
     apiKey: string;
-    keyId: string | null; // null if using env fallback
+    keyId: string; // 'env' for env fallback, 'user:userId' for user keys, or DB key ID
+    keyType: 'user' | 'rotation' | 'env'; // Track which tier is being used
+    isOnCooldown: boolean; // true if this key is currently on cooldown
 }
 
 /**
  * Get an available API key for the given provider
- * Uses environment variable by default, DB keys for rotation/fallback
+ * 
+ * 3-TIER FALLBACK HIERARCHY:
+ * 1. User's dedicated API key (if userId provided and key configured)
+ * 2. DB key rotation pool (api_keys table)
+ * 3. .env NVIDIA_API_KEY (last resort)
  * 
  * @param provider - The AI provider (default: 'nvidia')
- * @param useDbKeys - Force using DB keys (for rotation after rate limit)
- * @returns The API key and its ID (for marking as rate limited later)
+ * @param userId - Optional user ID for fetching dedicated key
+ * @returns The API key, its ID, and which tier it's from
  */
-export async function getAvailableApiKey(provider: string = 'nvidia', useDbKeys: boolean = false): Promise<AvailableKey> {
+export async function getAvailableApiKey(provider: string = 'nvidia', userId?: string | null): Promise<AvailableKey> {
     try {
         const envKey = process.env.NVIDIA_API_KEY || '';
 
-        // By default, use environment variable first
-        if (!useDbKeys && envKey && !isEnvKeyOnCooldown()) {
-            console.log('[APIKeyRotation] Using environment variable API key');
-            return {
-                apiKey: envKey,
-                keyId: 'env', // Special ID to track env key
-            };
+        // === TIER 1: User's dedicated API key ===
+        if (userId && !isUserKeyOnCooldown(userId)) {
+            const userKey = await getUserApiKeyForUser(userId);
+            if (userKey) {
+                console.log(`[APIKeyRotation] Using user's dedicated API key for user [${hashUserIdForLogging(userId)}]`);
+                return {
+                    apiKey: userKey,
+                    keyId: `user:${userId}`, // Special ID to track user's key
+                    keyType: 'user',
+                    isOnCooldown: false,
+                };
+            }
+            console.log(`[APIKeyRotation] User [${hashUserIdForLogging(userId)}] has no dedicated key, trying rotation pool...`);
+        } else if (userId && isUserKeyOnCooldown(userId)) {
+            console.log(`[APIKeyRotation] User key on cooldown for [${hashUserIdForLogging(userId)}], trying rotation pool...`);
         }
 
+        // === TIER 2: DB key rotation pool ===
         const now = Date.now();
 
         // Refresh cache if expired
@@ -77,41 +140,48 @@ export async function getAvailableApiKey(provider: string = 'nvidia', useDbKeys:
             await refreshKeyCache(provider);
         }
 
-        // Filter out keys that are currently on cooldown
+        // Filter keys by provider
         const availableKeys = keyCache.filter(key => key.provider === provider);
 
-        if (availableKeys.length === 0) {
-            // No DB keys available, try env key as last resort even if on cooldown
-            console.log('[APIKeyRotation] No DB keys available, using environment variable as last resort');
+        if (availableKeys.length > 0) {
+            // Round-robin selection with priority consideration
+            const weightedKeys = getWeightedKeys(availableKeys);
+            lastUsedKeyIndex = (lastUsedKeyIndex + 1) % weightedKeys.length;
+            const selectedKey = weightedKeys[lastUsedKeyIndex];
+
+            console.log(`[APIKeyRotation] Using rotation pool key ${selectedKey.id.substring(0, 8)}... (priority: ${selectedKey.priority})`);
+
+            // Increment daily counter (fire and forget)
+            incrementDailyCounter(selectedKey.id).catch(err => {
+                console.error('[APIKeyRotation] Error incrementing counter:', err);
+            });
+
             return {
-                apiKey: envKey,
-                keyId: null,
+                apiKey: selectedKey.apiKey,
+                keyId: selectedKey.id,
+                keyType: 'rotation',
+                isOnCooldown: false,
             };
         }
 
-        // Round-robin selection with priority consideration
-        // Higher priority keys appear more often in rotation
-        const weightedKeys = getWeightedKeys(availableKeys);
-        lastUsedKeyIndex = (lastUsedKeyIndex + 1) % weightedKeys.length;
-        const selectedKey = weightedKeys[lastUsedKeyIndex];
+        console.log('[APIKeyRotation] No rotation pool keys available, using .env fallback as last resort');
 
-        console.log(`[APIKeyRotation] Using DB key ${selectedKey.id.substring(0, 8)}... (priority: ${selectedKey.priority})`);
-
-        // Increment daily counter (fire and forget)
-        incrementDailyCounter(selectedKey.id).catch(err => {
-            console.error('[APIKeyRotation] Error incrementing counter:', err);
-        });
-
+        // === TIER 3: .env fallback ===
+        const envOnCooldown = isEnvKeyOnCooldown();
         return {
-            apiKey: selectedKey.apiKey,
-            keyId: selectedKey.id,
+            apiKey: envKey,
+            keyId: 'env',
+            keyType: 'env',
+            isOnCooldown: envOnCooldown,
         };
     } catch (error) {
         console.error('[APIKeyRotation] Error getting API key:', error);
         // Fallback to environment variable
         return {
             apiKey: process.env.NVIDIA_API_KEY || '',
-            keyId: null,
+            keyId: 'env',
+            keyType: 'env',
+            isOnCooldown: isEnvKeyOnCooldown(),
         };
     }
 }
@@ -167,18 +237,26 @@ function getWeightedKeys(keys: CachedKey[]): CachedKey[] {
 /**
  * Mark a key as rate limited and put it on cooldown
  * 
- * @param keyId - The key ID to mark ('env' for environment key, null for fallback)
+ * @param keyId - The key ID to mark ('env' for environment key, 'user:userId' for user keys, or DB key ID)
  * @param cooldownSeconds - How long to wait before using this key again
  */
-export async function markKeyRateLimited(keyId: string | null, cooldownSeconds: number = 60): Promise<void> {
+export async function markKeyRateLimited(keyId: string, cooldownSeconds: number = 60): Promise<void> {
     // Handle environment key
     if (keyId === 'env') {
         setEnvKeyCooldown(cooldownSeconds);
         return;
     }
 
+    // Handle user's dedicated key
+    if (keyId.startsWith('user:')) {
+        const userId = keyId.replace('user:', '');
+        setUserKeyCooldown(userId, cooldownSeconds);
+        return;
+    }
+
+    // Should not happen with new interface, but guard against empty strings
     if (!keyId) {
-        console.log('[APIKeyRotation] Cannot mark fallback key as rate limited');
+        console.log('[APIKeyRotation] Cannot mark empty key as rate limited');
         return;
     }
 

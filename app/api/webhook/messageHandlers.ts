@@ -5,22 +5,24 @@ import { isTakeoverActive } from '@/app/lib/humanTakeoverService';
 import { analyzeImageForReceipt, isConfirmedReceipt } from '@/app/lib/receiptDetectionService';
 import { analyzeAndUpdateStage, getOrCreateLead, incrementMessageCount, moveLeadToReceiptStage, shouldAnalyzeStage, moveLeadToAppointmentStage } from '@/app/lib/pipelineService';
 import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 import { detectNeedsHumanAttention, activateSmartPassive, trackQuestion, isSmartPassiveActive, deactivateSmartPassive } from '@/app/lib/smartPassiveService';
 import { calculateTypingDelay, getMessageGapDelay, detectMessageComplexity, getThinkingDelay } from '@/app/lib/responseTimingService';
 
 import { trackActivity } from '@/app/lib/activityTrackingService';
 import { callSendAPI, sendAppointmentCard, sendDigitalProductCards, sendPaymentMethodCards, sendProductCards, sendPropertyCards, sendTypingIndicator } from './facebookClient';
-import { getPageToken, getSettings } from './config';
+import { getPageToken, getSettings, getSettingsForUser } from './config';
 import { getDigitalProductById, getDigitalProducts, getPaymentMethods, getProductById, getProducts, getProperties, getPropertyById, PaymentMethod } from './data';
 import { isAppointmentQuery, isPaymentQuery, isProductQuery, isPropertyQuery } from './keywords';
 import { markCustomerReplied, scheduleNextFollowUp } from '@/app/lib/followUpService';
 import { sendMessengerAttachment, AttachmentType } from '@/app/lib/messengerService';
 import { getMediaById, trackMediaUsage } from '@/app/lib/mediaLibraryService';
+import { getBotSettingsForUser, getBotRulesForUser, getBotInstructionsForUser } from '@/app/lib/userBotConfigService';
 
 type WaitUntil = (promise: Promise<unknown>) => void;
 
 // Handle Referral Events (Chat to Buy)
-export async function handleReferral(sender_psid: string, referral: any, pageId?: string) {
+export async function handleReferral(sender_psid: string, referral: any, pageId?: string, userId?: string | null) {
     const ref = referral.ref; // e.g., "p_id:123|vars:Size-M,Color-Red" or "prop_id:456"
     if (!ref) return;
 
@@ -33,11 +35,21 @@ export async function handleReferral(sender_psid: string, referral: any, pageId?
     const varsString = params.get('vars');
 
     if (productId) {
-        // Get the product details
-        const { data: product, error } = await supabase
+        // Multi-tenant safety: require userId before executing query
+        if (!userId) {
+            console.warn('[Referral] Missing userId for product query, aborting to prevent data leakage');
+            await callSendAPI(sender_psid, {
+                text: "Hi! Thanks for messaging us. How can we help you today?"
+            }, pageId);
+            return;
+        }
+
+        // Get the product details - use supabaseAdmin with userId filter for multi-tenancy
+        const { data: product, error } = await supabaseAdmin
             .from('products')
             .select('*')
             .eq('id', productId)
+            .eq('user_id', userId)
             .single();
 
         if (product && !error) {
@@ -67,10 +79,21 @@ export async function handleReferral(sender_psid: string, referral: any, pageId?
     }
 
     if (propertyId) {
-        const { data: property, error } = await supabase
+        // Multi-tenant safety: require userId before executing query
+        if (!userId) {
+            console.warn('[Referral] Missing userId for property query, aborting to prevent data leakage');
+            await callSendAPI(sender_psid, {
+                text: "Hi! Thanks for checking a property. How can we help you today?"
+            }, pageId);
+            return;
+        }
+
+        // Use supabaseAdmin with userId filter for multi-tenancy
+        const { data: property, error } = await supabaseAdmin
             .from('properties')
             .select('id, title, price, address, image_url, status, bedrooms, bathrooms')
             .eq('id', propertyId)
+            .eq('user_id', userId)
             .single();
 
         if (property && !error) {
@@ -143,11 +166,11 @@ export async function handleReferral(sender_psid: string, referral: any, pageId?
     }, pageId);
 }
 
-export async function handlePostback(postback: any, sender_psid: string, recipient_psid?: string, defer?: WaitUntil) {
+export async function handlePostback(postback: any, sender_psid: string, recipient_psid?: string, userId?: string | null, defer?: WaitUntil) {
     if (postback.referral) {
         console.log('Postback has referral:', postback.referral);
         defer?.(
-            handleReferral(sender_psid, postback.referral, recipient_psid).catch(err => {
+            handleReferral(sender_psid, postback.referral, recipient_psid, userId).catch(err => {
                 console.error('Error handling postback referral:', err);
             })
         );
@@ -315,8 +338,17 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
         console.log('Appointment Cancellation Confirmed:', appointmentId);
 
         try {
-            // Cancel the appointment
-            const { data: appointment, error } = await supabase
+            // Multi-tenant safety: require userId before executing cancellation
+            if (!userId) {
+                console.error('[Cancellation] Missing userId for appointment cancellation, aborting to prevent cross-tenant access');
+                await callSendAPI(sender_psid, {
+                    text: "Sorry, there was an issue processing your request. Please try again or contact us directly. 😔"
+                }, recipient_psid);
+                return true;
+            }
+
+            // Cancel the appointment - use supabaseAdmin with userId filter for multi-tenancy
+            const { data: appointment, error } = await supabaseAdmin
                 .from('appointments')
                 .update({
                     status: 'cancelled',
@@ -324,6 +356,7 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
                     cancelled_reason: 'Cancelled by customer via Messenger confirmation'
                 })
                 .eq('id', appointmentId)
+                .eq('user_id', userId)
                 .select()
                 .single();
 
@@ -369,11 +402,21 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
         const appointmentId = postback.payload.replace('CANCEL_APT_KEEP_', '');
         console.log('Appointment Cancellation Rejected (Kept):', appointmentId);
 
-        // Fetch appointment details for the message
-        const { data: appointment } = await supabase
+        // Multi-tenant safety: require userId before executing query
+        if (!userId) {
+            console.warn('[KeepAppointment] Missing userId for appointment query, using fallback message');
+            await callSendAPI(sender_psid, {
+                text: "✅ Your appointment has been kept. We look forward to seeing you! 😊"
+            }, recipient_psid);
+            return true;
+        }
+
+        // Fetch appointment details for the message - use supabaseAdmin with userId filter
+        const { data: appointment } = await supabaseAdmin
             .from('appointments')
             .select('appointment_date, start_time')
             .eq('id', appointmentId)
+            .eq('user_id', userId)
             .single();
 
         if (appointment) {
@@ -401,7 +444,7 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
     if (postback.payload === 'SHOW_PRODUCTS') {
         console.log('Show Products Postback received');
 
-        const products = await getProducts();
+        const products = await getProducts(userId || undefined);
         if (products.length > 0) {
             await sendProductCards(sender_psid, products, recipient_psid);
         } else {
@@ -416,8 +459,8 @@ export async function handlePostback(postback: any, sender_psid: string, recipie
     return false;
 }
 
-export async function handleMessage(sender_psid: string, received_message: string, pageId?: string) {
-    console.log('handleMessage called, generating response...');
+export async function handleMessage(sender_psid: string, received_message: string, pageId?: string, userId?: string | null) {
+    console.log('handleMessage called, generating response... userId:', userId);
 
     // Mark customer as replied (resets follow-up tracking)
     markCustomerReplied(sender_psid).catch(err => {
@@ -434,60 +477,76 @@ export async function handleMessage(sender_psid: string, received_message: strin
     // Get page access token for profile fetching (using per-page token)
     const pageToken = await getPageToken(pageId);
 
-    // Get or create lead early to check goal status
-    const lead = await getOrCreateLead(sender_psid, pageToken || undefined);
+    // Get or create lead early to check goal status (pass userId for multi-tenancy)
+    const lead = await getOrCreateLead(sender_psid, pageToken || undefined, userId);
 
     // --- BOT GOAL CHECK ---
     // --- BOT GOAL CHECK ---
     // Check if the primary goal is already met in the database and ensure pipeline stage is correct
     if (lead) {
         try {
-            const settings = await getSettings();
+            const settings = userId ? await getSettingsForUser(userId) : await getSettings();
             const primaryGoal = settings?.primary_goal;
 
             if (primaryGoal === 'appointment_booking') {
-                // Check if they have a valid future appointment or recently completed one
-                const { data: appointment } = await supabase
-                    .from('appointments')
-                    .select('id, appointment_date, start_time')
-                    .eq('sender_psid', sender_psid) // Appointments use sender_psid
-                    .neq('status', 'cancelled')
-                    .order('appointment_date', { ascending: false })
-                    .limit(1)
-                    .single();
+                // Multi-tenant safety: skip goal check if userId is missing
+                if (!userId) {
+                    console.warn('[GoalCheck] Missing userId for appointment goal check, skipping');
+                } else {
+                    // Check if they have a valid future appointment or recently completed one
+                    // Use supabaseAdmin with userId filter for multi-tenancy
+                    const { data: appointment } = await supabaseAdmin
+                        .from('appointments')
+                        .select('id, appointment_date, start_time')
+                        .eq('sender_psid', sender_psid)
+                        .eq('user_id', userId)
+                        .neq('status', 'cancelled')
+                        .order('appointment_date', { ascending: false })
+                        .limit(1)
+                        .single();
 
-                if (appointment) {
-                    console.log(`[GoalCheck] Found appointment for ${sender_psid}, ensuring correct stage...`);
-                    await moveLeadToAppointmentStage(sender_psid, {
-                        appointmentId: appointment.id,
-                        appointmentDate: appointment.appointment_date,
-                        startTime: appointment.start_time
-                    });
+                    if (appointment) {
+                        console.log(`[GoalCheck] Found appointment for ${sender_psid}, ensuring correct stage...`);
+                        await moveLeadToAppointmentStage(sender_psid, {
+                            appointmentId: appointment.id,
+                            appointmentDate: appointment.appointment_date,
+                            startTime: appointment.start_time
+                        }, userId);
+                    }
                 }
             } else if (primaryGoal === 'purchase') {
                 // Check if they have a completed order OR a detected receipt
-                // 1. Check verified receipts
+                // 1. Check verified receipts - multi-tenant safety: require userId
                 if (lead.receipt_image_url) {
-                    // If they already have a receipt detected, ensure they are in the receipt stage
-                    // We pass a generic reason since we don't have the original image context here if it was old
-                    await moveLeadToReceiptStage(lead.id, lead.receipt_image_url, "Receipt previously detected");
+                    if (!userId) {
+                        console.warn('[GoalCheck] Missing userId for receipt stage update, skipping');
+                    } else {
+                        // If they already have a receipt detected, ensure they are in the receipt stage
+                        // We pass a generic reason since we don't have the original image context here if it was old
+                        await moveLeadToReceiptStage(lead.id, lead.receipt_image_url, "Receipt previously detected", userId);
+                    }
                 }
 
-                // 2. Check orders table
-                const { data: order } = await supabase
-                    .from('orders')
-                    .select('id')
-                    .eq('lead_id', lead.id)
-                    .neq('status', 'pending') // Any non-pending status counts as a conversion
-                    .neq('status', 'cancelled')
-                    .limit(1)
-                    .single();
+                // 2. Check orders table - multi-tenant safety: require userId
+                if (!userId) {
+                    console.warn('[GoalCheck] Missing userId for order goal check, skipping order lookup');
+                } else {
+                    const { data: order } = await supabaseAdmin
+                        .from('orders')
+                        .select('id')
+                        .eq('lead_id', lead.id)
+                        .eq('user_id', userId)
+                        .neq('status', 'pending')
+                        .neq('status', 'cancelled')
+                        .limit(1)
+                        .single();
 
-                if (order) {
-                    console.log(`[GoalCheck] Found order for ${lead.id}, ensuring correct stage...`);
-                    // We treat a completed order same as a receipt for now (Payment Sent / Won)
-                    // If no receipt image, pass empty string or placeholder
-                    await moveLeadToReceiptStage(lead.id, "", "Order found in database");
+                    if (order) {
+                        console.log(`[GoalCheck] Found order for ${lead.id}, ensuring correct stage...`);
+                        // We treat a completed order same as a receipt for now (Payment Sent / Won)
+                        // If no receipt image, pass empty string or placeholder
+                        await moveLeadToReceiptStage(lead.id, "", "Order found in database", userId);
+                    }
                 }
             }
         } catch (goalError) {
@@ -514,12 +573,17 @@ export async function handleMessage(sender_psid: string, received_message: strin
                 console.error('Error extracting contact info:', err);
             });
 
-            // CHeck if we should analyze stage (runs in background, non-blocking)
+            // Check if we should analyze stage (runs in background, non-blocking)
+            // Multi-tenant safety: require userId for stage analysis
             if (shouldAnalyzeStage({ ...lead, message_count: messageCount }, received_message)) {
-                console.log('Triggering pipeline stage analysis...');
-                analyzeAndUpdateStage(lead, sender_psid).catch((err: unknown) => {
-                    console.error('Error in stage analysis:', err);
-                });
+                if (!userId) {
+                    console.warn('[StageAnalysis] Missing userId for stage analysis, skipping');
+                } else {
+                    console.log('Triggering pipeline stage analysis...');
+                    analyzeAndUpdateStage(lead, sender_psid, userId).catch((err: unknown) => {
+                        console.error('Error in stage analysis:', err);
+                    });
+                }
             }
 
             // --- CONVERSATION SUMMARIZATION CHECK ---
@@ -546,7 +610,7 @@ export async function handleMessage(sender_psid: string, received_message: strin
         (async () => {
             try {
                 // Get recent history for context
-                const history = await getConversationHistory(sender_psid);
+                const history = await getConversationHistory(sender_psid, userId);
                 // Add current message to history for analysis
                 const currentContext = [
                     ...history.map(m => ({ ...m, role: m.role as 'user' | 'assistant' })),
@@ -573,8 +637,8 @@ export async function handleMessage(sender_psid: string, received_message: strin
             console.error('[SmartPassive] Error tracking question:', err);
         });
 
-        // Get Bot Response
-        const rawResponseText = await getBotResponse(received_message, sender_psid);
+        // Get Bot Response - pass userId for user-aware bot configuration
+        const rawResponseText = await getBotResponse(received_message, sender_psid, undefined, userId);
         console.log('Raw Bot response:', rawResponseText.substring(0, 100) + '...');
 
         // Parse tags from response
@@ -631,7 +695,7 @@ export async function handleMessage(sender_psid: string, received_message: strin
             await new Promise(resolve => setTimeout(resolve, thinkingDelay));
 
             // Check if split messages is enabled
-            const settings = await getSettings();
+            const settings = userId ? await getSettingsForUser(userId) : await getSettings();
             const splitMessagesEnabled = settings?.split_messages ?? false;
 
             if (splitMessagesEnabled) {
@@ -665,19 +729,19 @@ export async function handleMessage(sender_psid: string, received_message: strin
         // Handle targeted product recommendation (single item)
         if (recommendedProductId) {
             console.log('AI triggered [RECOMMEND_PRODUCT] for:', recommendedProductId);
-            const { product } = await getProductById(recommendedProductId);
+            const { product } = await getProductById(recommendedProductId, userId || undefined);
             if (product) {
                 await sendProductCards(sender_psid, [product], pageId);
             } else {
                 console.log('Recommended product not found, falling back to all products');
-                const products = await getProducts();
+                const products = await getProducts(userId || undefined);
                 if (products.length > 0) {
                     await sendProductCards(sender_psid, products, pageId);
                 }
             }
         } else if (showProducts) {
             console.log('AI triggered [SHOW_PRODUCTS]');
-            const products = await getProducts();
+            const products = await getProducts(userId || undefined);
             if (products.length > 0) {
                 await sendProductCards(sender_psid, products, pageId);
             }
@@ -686,19 +750,19 @@ export async function handleMessage(sender_psid: string, received_message: strin
         // Handle targeted property recommendation (single item)
         if (recommendedPropertyId) {
             console.log('AI triggered [RECOMMEND_PROPERTY] for:', recommendedPropertyId);
-            const property = await getPropertyById(recommendedPropertyId);
+            const property = await getPropertyById(recommendedPropertyId, userId || undefined);
             if (property) {
                 await sendPropertyCards(sender_psid, [property], pageId);
             } else {
                 console.log('Recommended property not found, falling back to all properties');
-                const properties = await getProperties();
+                const properties = await getProperties(userId || undefined);
                 if (properties.length > 0) {
                     await sendPropertyCards(sender_psid, properties, pageId);
                 }
             }
         } else if (showProperties) {
             console.log('AI triggered [SHOW_PROPERTIES]');
-            const properties = await getProperties();
+            const properties = await getProperties(userId || undefined);
             if (properties.length > 0) {
                 await sendPropertyCards(sender_psid, properties, pageId);
             }
@@ -712,19 +776,19 @@ export async function handleMessage(sender_psid: string, received_message: strin
         // Handle targeted digital product recommendation (single item)
         if (recommendedDigitalProductId) {
             console.log('AI triggered [RECOMMEND_DIGITAL_PRODUCT] for:', recommendedDigitalProductId);
-            const digitalProduct = await getDigitalProductById(recommendedDigitalProductId);
+            const digitalProduct = await getDigitalProductById(recommendedDigitalProductId, userId || undefined);
             if (digitalProduct) {
                 await sendDigitalProductCards(sender_psid, [digitalProduct], pageId);
             } else {
                 console.log('Recommended digital product not found, falling back to all digital products');
-                const digitalProducts = await getDigitalProducts();
+                const digitalProducts = await getDigitalProducts(userId || undefined);
                 if (digitalProducts.length > 0) {
                     await sendDigitalProductCards(sender_psid, digitalProducts, pageId);
                 }
             }
         } else if (showDigitalProducts) {
             console.log('AI triggered [SHOW_DIGITAL_PRODUCTS]');
-            const digitalProducts = await getDigitalProducts();
+            const digitalProducts = await getDigitalProducts(userId || undefined);
             if (digitalProducts.length > 0) {
                 await sendDigitalProductCards(sender_psid, digitalProducts, pageId);
             }
@@ -732,7 +796,7 @@ export async function handleMessage(sender_psid: string, received_message: strin
 
         if (showPaymentMethods) {
             console.log('AI triggered [SHOW_PAYMENT_METHODS]');
-            const paymentMethods = await getPaymentMethods();
+            const paymentMethods = await getPaymentMethods(userId || undefined);
             if (paymentMethods.length > 0) {
                 await sendPaymentMethodCards(sender_psid, paymentMethods, pageId);
             }
@@ -862,7 +926,7 @@ export async function handleMessage(sender_psid: string, received_message: strin
                     }, pageId);
 
                     // Manually trigger product cards since we removed the tag
-                    const products = await getProducts();
+                    const products = await getProducts(userId || undefined);
                     if (products.length > 0) {
                         await sendProductCards(sender_psid, products, pageId);
                     }
@@ -884,8 +948,8 @@ export async function handleMessage(sender_psid: string, received_message: strin
 }
 
 // Handle image messages - analyze and pass context to chatbot for intelligent response
-export async function handleImageMessage(sender_psid: string, imageUrl: string, pageId?: string, accompanyingText?: string) {
-    console.log('handleImageMessage called, analyzing image...');
+export async function handleImageMessage(sender_psid: string, imageUrl: string, pageId?: string, userId?: string | null, accompanyingText?: string) {
+    console.log('handleImageMessage called, analyzing image... userId:', userId);
 
     // Mark customer as replied (resets follow-up tracking)
     markCustomerReplied(sender_psid).catch(err => {
@@ -903,8 +967,8 @@ export async function handleImageMessage(sender_psid: string, imageUrl: string, 
         // Get page token for this specific page
         const pageToken = await getPageToken(pageId);
 
-        // Get or create the lead first
-        const lead = await getOrCreateLead(sender_psid, pageToken || undefined);
+        // Get or create the lead first (pass userId for multi-tenancy)
+        const lead = await getOrCreateLead(sender_psid, pageToken || undefined, userId);
         if (!lead) {
             console.error('Could not get or create lead for sender:', sender_psid);
             return;
@@ -932,7 +996,7 @@ export async function handleImageMessage(sender_psid: string, imageUrl: string, 
 
         // If receipt detected, verify against stored payment methods
         if (result.isReceipt && result.confidence >= 0.5) {
-            const paymentMethods = await getPaymentMethods();
+            const paymentMethods = await getPaymentMethods(userId || undefined);
 
             // Priority: Account NUMBER is the most reliable (names are often masked like "JO*N AN***O")
             if (paymentMethods.length > 0) {
@@ -1002,9 +1066,14 @@ export async function handleImageMessage(sender_psid: string, imageUrl: string, 
         }
 
         // If high-confidence receipt detected, also move to receipt stage
+        // Multi-tenant safety: require userId before updating receipt stage
         if (isConfirmedReceipt(result)) {
-            console.log('Receipt confirmed! Moving lead to payment stage...');
-            await moveLeadToReceiptStage(lead.id, imageUrl, result.details || 'Receipt detected by AI');
+            if (!userId) {
+                console.warn('[ReceiptDetection] Missing userId for receipt stage update, skipping');
+            } else {
+                console.log('Receipt confirmed! Moving lead to payment stage...');
+                await moveLeadToReceiptStage(lead.id, imageUrl, result.details || 'Receipt detected by AI', userId);
+            }
         }
 
         // Increment message count for the lead
@@ -1022,12 +1091,12 @@ export async function handleImageMessage(sender_psid: string, imageUrl: string, 
             ? `[Customer sent an image with message: "${accompanyingText}"]`
             : "[Customer sent an image]";
 
-        // Get chatbot response with image context
-        const responseText = await getBotResponse(userMessage, sender_psid, imageContext);
+        // Get chatbot response with image context - pass userId for user-aware config
+        const responseText = await getBotResponse(userMessage, sender_psid, imageContext, userId);
         console.log('Bot response for image:', responseText.substring(0, 100) + '...');
 
         // Send the AI's response (possibly split into multiple messages)
-        const settings = await getSettings();
+        const settings = userId ? await getSettingsForUser(userId) : await getSettings();
         const splitMessagesEnabled = settings?.split_messages ?? false;
 
         if (splitMessagesEnabled) {

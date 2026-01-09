@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET: List all digital products with their media
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data: products, error } = await supabase
             .from('digital_products')
             .select(`
@@ -12,6 +20,7 @@ export async function GET() {
                 checkout_form:forms(id, title),
                 media:digital_product_media(id, media_type, media_url, thumbnail_url, display_order)
             `)
+            .eq('user_id', userId)
             .order('display_order', { ascending: true });
 
         if (error) {
@@ -22,7 +31,7 @@ export async function GET() {
         // Sort media by display_order for each product
         const productsWithSortedMedia = products?.map(product => ({
             ...product,
-            media: product.media?.sort((a: any, b: any) => a.display_order - b.display_order) || []
+            media: product.media?.sort((a: { display_order: number }, b: { display_order: number }) => a.display_order - b.display_order) || []
         }));
 
         return NextResponse.json(productsWithSortedMedia || []);
@@ -35,6 +44,13 @@ export async function GET() {
 // POST: Create a new digital product
 export async function POST(request: NextRequest) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await request.json();
         const {
             title,
@@ -64,6 +80,7 @@ export async function POST(request: NextRequest) {
         const { data: product, error: productError } = await supabase
             .from('digital_products')
             .insert({
+                user_id: userId,
                 title,
                 description,
                 short_description,
@@ -91,7 +108,8 @@ export async function POST(request: NextRequest) {
 
         // Insert media if provided
         if (media.length > 0) {
-            const mediaRecords = media.map((m: any, index: number) => ({
+            const mediaRecords = media.map((m: { media_type: string; media_url: string; thumbnail_url?: string }, index: number) => ({
+                user_id: userId,
                 digital_product_id: product.id,
                 media_type: m.media_type,
                 media_url: m.media_url,
@@ -119,6 +137,7 @@ export async function POST(request: NextRequest) {
                 media:digital_product_media(id, media_type, media_url, thumbnail_url, display_order)
             `)
             .eq('id', product.id)
+            .eq('user_id', userId)
             .single();
 
         return NextResponse.json(completeProduct, { status: 201 });

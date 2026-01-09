@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin, getUserIdFromPageId } from '@/app/lib/supabaseAdmin';
 
 interface AppointmentSettings {
     business_hours_start: string;
@@ -16,6 +16,17 @@ interface TimeSlot {
     end_time: string;
     available: boolean;
 }
+
+// Default settings if none exist in database
+const defaultSettings: AppointmentSettings = {
+    business_hours_start: '09:00:00',
+    business_hours_end: '17:00:00',
+    slot_duration_minutes: 60,
+    days_available: [1, 2, 3, 4, 5],
+    booking_lead_time_hours: 24,
+    max_advance_booking_days: 30,
+    buffer_between_slots_minutes: 0,
+};
 
 // Helper function to parse time string to minutes since midnight
 function timeToMinutes(time: string): number {
@@ -35,9 +46,20 @@ export async function GET(request: NextRequest) {
     try {
         const { searchParams } = new URL(request.url);
         const dateParam = searchParams.get('date');
+        const pageId = searchParams.get('pageId');
 
         if (!dateParam) {
             return NextResponse.json({ error: 'Date parameter is required (YYYY-MM-DD)' }, { status: 400 });
+        }
+
+        if (!pageId) {
+            return NextResponse.json({ error: 'pageId parameter is required' }, { status: 400 });
+        }
+
+        // Resolve user_id from pageId
+        const userId = await getUserIdFromPageId(pageId);
+        if (!userId) {
+            return NextResponse.json({ error: 'Invalid pageId - page not found or inactive' }, { status: 400 });
         }
 
         // Validate date format
@@ -46,24 +68,21 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ error: 'Invalid date format. Use YYYY-MM-DD' }, { status: 400 });
         }
 
-        // Get appointment settings
-        const { data: settingsData, error: settingsError } = await supabase
+        // Get appointment settings for this specific user
+        const { data: settingsData, error: settingsError } = await supabaseAdmin
             .from('appointment_settings')
             .select('*')
-            .limit(1)
+            .eq('user_id', userId)
             .single();
 
-        if (settingsError || !settingsData) {
-            console.error('Error fetching settings:', settingsError);
-            return NextResponse.json({ error: 'Appointment settings not found' }, { status: 500 });
-        }
+        // Use default settings if none exist for this user
+        const settings: AppointmentSettings = (settingsError || !settingsData) ? defaultSettings : settingsData;
 
-        const settings: AppointmentSettings = settingsData;
-
-        // Check if the date is a disabled date
-        const { data: disabledDate } = await supabase
+        // Check if the date is a disabled date for this user
+        const { data: disabledDate } = await supabaseAdmin
             .from('appointment_disabled_dates')
             .select('id')
+            .eq('user_id', userId)
             .eq('disabled_date', dateParam)
             .limit(1);
 
@@ -112,10 +131,11 @@ export async function GET(request: NextRequest) {
             });
         }
 
-        // Get existing appointments for this date
-        const { data: existingAppointments, error: appointmentsError } = await supabase
+        // Get existing appointments for this date and user
+        const { data: existingAppointments, error: appointmentsError } = await supabaseAdmin
             .from('appointments')
             .select('start_time, end_time')
+            .eq('user_id', userId)
             .eq('appointment_date', dateParam)
             .neq('status', 'cancelled');
 

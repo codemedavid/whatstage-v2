@@ -20,9 +20,9 @@ function cleanupExpiredSessions() {
     }
 }
 
-// Generate a random session ID
+// Generate a cryptographically secure session ID
 function generateSessionId(): string {
-    return Math.random().toString(36).substring(2) + Date.now().toString(36);
+    return crypto.randomUUID();
 }
 
 // Store pages data and return session ID

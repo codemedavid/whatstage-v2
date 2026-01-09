@@ -1,4 +1,4 @@
-import { supabase } from '@/app/lib/supabase';
+import { createClient } from '@/app/lib/supabaseServer';
 import PipelineClient from './components/PipelineClient';
 
 // Force dynamic rendering for fresh data on each request
@@ -26,9 +26,22 @@ interface Stage {
 }
 
 async function getPipelineData(): Promise<{ stages: Stage[] }> {
+    const supabase = await createClient();
+
+    // Get the current authenticated user
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+        console.error('Error fetching user or user not authenticated:', authError);
+        return { stages: [] };
+    }
+
+    const userId = user.id;
+
     const { data: stages, error: stagesError } = await supabase
         .from('pipeline_stages')
         .select('*')
+        .eq('user_id', userId)
         .order('display_order', { ascending: true });
 
     if (stagesError) {
@@ -39,6 +52,7 @@ async function getPipelineData(): Promise<{ stages: Stage[] }> {
     const { data: leads, error: leadsError } = await supabase
         .from('leads')
         .select('*')
+        .eq('user_id', userId)
         .order('last_message_at', { ascending: false });
 
     if (leadsError) {

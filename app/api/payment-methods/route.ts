@@ -1,9 +1,16 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - List all payment methods (optionally filtered by category)
 export async function GET(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const categoryId = searchParams.get('categoryId');
         const activeOnly = searchParams.get('activeOnly') === 'true';
@@ -11,6 +18,7 @@ export async function GET(req: Request) {
         let query = supabase
             .from('payment_methods')
             .select('*')
+            .eq('user_id', userId)
             .order('display_order', { ascending: true });
 
         if (categoryId) {
@@ -38,6 +46,13 @@ export async function GET(req: Request) {
 // POST - Create new payment method
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { categoryId, name, accountName, accountNumber, qrCodeUrl, instructions, displayOrder } = body;
 
@@ -48,6 +63,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('payment_methods')
             .insert({
+                user_id: userId,
                 category_id: categoryId || null,
                 name,
                 account_name: accountName || null,
@@ -75,6 +91,13 @@ export async function POST(req: Request) {
 // PATCH - Update payment method
 export async function PATCH(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { id, name, accountName, accountNumber, qrCodeUrl, instructions, isActive, displayOrder } = body;
 
@@ -82,8 +105,7 @@ export async function PATCH(req: Request) {
             return NextResponse.json({ error: 'Payment method ID is required' }, { status: 400 });
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updates: any = {};
+        const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
         if (accountName !== undefined) updates.account_name = accountName;
         if (accountNumber !== undefined) updates.account_number = accountNumber;
@@ -96,6 +118,7 @@ export async function PATCH(req: Request) {
             .from('payment_methods')
             .update(updates)
             .eq('id', id)
+            .eq('user_id', userId)
             .select()
             .single();
 
@@ -114,6 +137,13 @@ export async function PATCH(req: Request) {
 // DELETE - Delete payment method
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -124,7 +154,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('payment_methods')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting payment method:', error);

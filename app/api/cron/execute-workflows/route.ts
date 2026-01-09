@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 import { continueExecution } from '@/app/lib/workflowEngine';
 
 export const dynamic = 'force-dynamic';
@@ -20,11 +20,12 @@ export async function GET(req: Request) {
         console.log('Executing scheduled workflows...');
 
         // Get all pending executions that are scheduled for now or earlier
-        const { data: executions, error } = await supabase
+        // Uses supabaseAdmin to bypass RLS since cron jobs don't have user auth context
+        const { data: executions, error } = await supabaseAdmin
             .from('workflow_executions')
             .select(`
         *,
-        workflows:workflows(workflow_data)
+        workflows:workflows(workflow_data, user_id)
       `)
             .eq('status', 'pending')
             .not('scheduled_for', 'is', null)
@@ -43,28 +44,34 @@ export async function GET(req: Request) {
         // Process each execution
         for (const execution of executions) {
             try {
-                // Get lead sender_id
-                const { data: lead } = await supabase
+                // Get user_id from the workflow for proper data isolation
+                const workflow = execution.workflows as any;
+                const userId = workflow?.user_id || execution.user_id;
+
+                // Get lead sender_id, filtering by user_id for multi-tenancy
+                const { data: lead } = await supabaseAdmin
                     .from('leads')
                     .select('sender_id')
                     .eq('id', execution.lead_id)
+                    .eq('user_id', userId)
                     .single();
 
                 if (!lead) {
-                    console.error('Lead not found for execution:', execution.id);
+                    console.error('Lead not found for execution:', execution.id, 'user_id:', userId);
                     continue;
                 }
 
                 // Clear scheduled_for and continue execution
-                await supabase
+                await supabaseAdmin
                     .from('workflow_executions')
                     .update({ scheduled_for: null })
                     .eq('id', execution.id);
 
-                const workflowData = (execution.workflows as any).workflow_data;
+                const workflowData = workflow.workflow_data;
                 const executionData = execution.execution_data as any || {};
 
                 // Build context, restoring appointment data if present
+                // Include userId for proper multi-tenancy in workflow actions
                 const context = {
                     leadId: execution.lead_id,
                     senderId: lead.sender_id,
@@ -72,11 +79,12 @@ export async function GET(req: Request) {
                     appointmentDateTime: executionData.appointmentDateTime
                         ? new Date(executionData.appointmentDateTime)
                         : undefined,
+                    userId, // Pass userId for multi-tenant workflow actions
                 };
 
                 await continueExecution(execution.id, workflowData, context);
 
-                console.log('Processed execution:', execution.id);
+                console.log('Processed execution:', execution.id, 'for user:', userId);
             } catch (execError) {
                 console.error('Error processing execution:', execution.id, execError);
             }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
     LayoutGrid,
     Settings,
@@ -16,6 +16,7 @@ import {
     Bot,
     FileText,
     Download,
+    Shield,
 } from 'lucide-react';
 
 import Link from 'next/link';
@@ -24,9 +25,24 @@ import { createClient } from '@/app/lib/supabaseClient';
 
 export default function Sidebar() {
     const [isCollapsed, setIsCollapsed] = useState(true);
+    const [isAdmin, setIsAdmin] = useState(false);
     const pathname = usePathname();
     const router = useRouter();
     const supabase = createClient();
+
+    // Check admin status on mount
+    useEffect(() => {
+        const checkAdmin = async () => {
+            try {
+                const res = await fetch('/api/admin/check');
+                const data = await res.json();
+                setIsAdmin(data.isAdmin === true);
+            } catch {
+                setIsAdmin(false);
+            }
+        };
+        checkAdmin();
+    }, []);
 
     const navItems = [
         { icon: LayoutGrid, href: '/', label: 'Dashboard' },
@@ -88,6 +104,25 @@ export default function Sidebar() {
                         </Link>
                     );
                 })}
+
+                {/* Admin Link - Only visible to admins */}
+                {isAdmin && (
+                    <Link
+                        href="/admin"
+                        className={`flex items-center gap-3 p-2 rounded-lg transition-colors ${pathname === '/admin'
+                            ? 'text-white bg-white/10'
+                            : 'hover:text-white hover:bg-white/10'
+                            } ${isCollapsed ? 'justify-center' : ''} mt-2 border-t border-[#1a3828] pt-4`}
+                        title={isCollapsed ? 'Admin' : undefined}
+                    >
+                        <Shield size={20} className="flex-shrink-0 text-orange-400" />
+                        {!isCollapsed && (
+                            <span className="whitespace-nowrap overflow-hidden text-orange-400">
+                                Admin
+                            </span>
+                        )}
+                    </Link>
+                )}
             </nav>
 
             {/* Bottom Actions */}

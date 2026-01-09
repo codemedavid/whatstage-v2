@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 
 interface AddToCartBody {
     sender_id: string; // PSID
@@ -11,12 +11,13 @@ interface AddToCartBody {
 }
 
 // Helper to get or create a pending order (cart) for a lead
-async function getOrCreateCart(leadId: string) {
+async function getOrCreateCart(leadId: string, userId: string) {
     // Try to find an existing pending order
-    const { data: existingOrder, error: findError } = await supabase
+    const { data: existingOrder, error: findError } = await supabaseAdmin
         .from('orders')
         .select('*')
         .eq('lead_id', leadId)
+        .eq('user_id', userId)
         .eq('status', 'pending')
         .order('created_at', { ascending: false })
         .limit(1)
@@ -27,12 +28,13 @@ async function getOrCreateCart(leadId: string) {
     }
 
     // Create a new pending order (cart)
-    const { data: newOrder, error: createError } = await supabase
+    const { data: newOrder, error: createError } = await supabaseAdmin
         .from('orders')
         .insert({
             lead_id: leadId,
             status: 'pending',
             total_amount: 0,
+            user_id: userId,
         })
         .select()
         .single();
@@ -47,7 +49,7 @@ async function getOrCreateCart(leadId: string) {
 
 // Helper to recalculate and update order total
 async function recalculateOrderTotal(orderId: string) {
-    const { data: items, error } = await supabase
+    const { data: items, error } = await supabaseAdmin
         .from('order_items')
         .select('total_price')
         .eq('order_id', orderId);
@@ -59,7 +61,7 @@ async function recalculateOrderTotal(orderId: string) {
 
     const total = items?.reduce((sum, item) => sum + (item.total_price || 0), 0) || 0;
 
-    await supabase
+    await supabaseAdmin
         .from('orders')
         .update({ total_amount: total })
         .eq('id', orderId);
@@ -75,8 +77,8 @@ export async function GET(request: NextRequest) {
     }
 
     try {
-        // Find the lead by sender_id
-        const { data: lead, error: leadError } = await supabase
+        // Find the lead by sender_id (use supabaseAdmin to bypass RLS)
+        const { data: lead, error: leadError } = await supabaseAdmin
             .from('leads')
             .select('id')
             .eq('sender_id', senderId)
@@ -87,7 +89,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Find the pending order (cart)
-        const { data: order, error: orderError } = await supabase
+        const { data: order, error: orderError } = await supabaseAdmin
             .from('orders')
             .select('*')
             .eq('lead_id', lead.id)
@@ -101,7 +103,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Fetch items in the cart
-        const { data: items, error: itemsError } = await supabase
+        const { data: items, error: itemsError } = await supabaseAdmin
             .from('order_items')
             .select('*, products(name, image_url)')
             .eq('order_id', order.id);
@@ -133,21 +135,39 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Find or create the lead
-        let { data: lead, error: leadError } = await supabase
+        // FIRST: Get product details including user_id to determine data ownership
+        const { data: product, error: productError } = await supabaseAdmin
+            .from('products')
+            .select('name, user_id')
+            .eq('id', product_id)
+            .single();
+
+        if (productError || !product) {
+            return NextResponse.json({ error: 'Product not found' }, { status: 404 });
+        }
+
+        // Extract user_id from product (this is the store owner's user_id)
+        const userId = product.user_id;
+
+        // Find or create the lead (filter by user_id for multi-tenancy)
+        let { data: lead, error: leadError } = await supabaseAdmin
             .from('leads')
             .select('id, page_id')
             .eq('sender_id', sender_id)
+            .eq('user_id', userId)
             .single();
 
         if (leadError || !lead) {
-            // Create lead if not exists, include page_id if provided
-            const leadInsert: { sender_id: string; page_id?: string } = { sender_id };
+            // Create lead if not exists, include page_id and user_id
+            const leadInsert: { sender_id: string; page_id?: string; user_id?: string } = {
+                sender_id,
+                user_id: userId,
+            };
             if (page_id) {
                 leadInsert.page_id = page_id;
             }
 
-            const { data: newLead, error: createLeadError } = await supabase
+            const { data: newLead, error: createLeadError } = await supabaseAdmin
                 .from('leads')
                 .insert(leadInsert)
                 .select()
@@ -160,30 +180,18 @@ export async function POST(request: NextRequest) {
             lead = newLead;
         } else if (page_id && !lead.page_id) {
             // Update existing lead with page_id if it doesn't have one
-            await supabase
+            await supabaseAdmin
                 .from('leads')
                 .update({ page_id })
                 .eq('id', lead.id);
             lead.page_id = page_id;
         }
 
-
-        // Get product details for the snapshot
-        const { data: product, error: productError } = await supabase
-            .from('products')
-            .select('name')
-            .eq('id', product_id)
-            .single();
-
-        if (productError || !product) {
-            return NextResponse.json({ error: 'Product not found' }, { status: 404 });
-        }
-
         // Get or create the cart - lead is guaranteed to exist at this point
-        const cart = await getOrCreateCart(lead!.id);
+        const cart = await getOrCreateCart(lead!.id, userId);
 
         // Check if product already in cart (with same variations)
-        const { data: existingItem } = await supabase
+        const { data: existingItem } = await supabaseAdmin
             .from('order_items')
             .select('id, quantity')
             .eq('order_id', cart.id)
@@ -193,7 +201,7 @@ export async function POST(request: NextRequest) {
 
         if (existingItem) {
             // Update quantity
-            const { error: updateError } = await supabase
+            const { error: updateError } = await supabaseAdmin
                 .from('order_items')
                 .update({ quantity: existingItem.quantity + quantity })
                 .eq('id', existingItem.id);
@@ -203,8 +211,8 @@ export async function POST(request: NextRequest) {
                 return NextResponse.json({ error: 'Failed to update cart' }, { status: 500 });
             }
         } else {
-            // Insert new item
-            const { error: insertError } = await supabase
+            // Insert new item with user_id for tenant isolation
+            const { error: insertError } = await supabaseAdmin
                 .from('order_items')
                 .insert({
                     order_id: cart.id,
@@ -213,6 +221,7 @@ export async function POST(request: NextRequest) {
                     quantity,
                     unit_price,
                     variations: variations || null,
+                    user_id: product.user_id,
                 });
 
             if (insertError) {
@@ -229,13 +238,13 @@ export async function POST(request: NextRequest) {
         if (lead!.page_id) {
             try {
                 // Fetch all cart items to show in the message
-                const { data: cartItems } = await supabase
+                const { data: cartItems } = await supabaseAdmin
                     .from('order_items')
                     .select('product_name, quantity, unit_price, variations')
                     .eq('order_id', cart.id);
 
                 // Get updated cart total
-                const { data: updatedCart } = await supabase
+                const { data: updatedCart } = await supabaseAdmin
                     .from('orders')
                     .select('total_amount')
                     .eq('id', cart.id)
@@ -325,10 +334,10 @@ export async function DELETE(request: NextRequest) {
             return NextResponse.json({ error: 'item_id or product_name is required' }, { status: 400 });
         }
 
-        // Find the lead
-        const { data: lead, error: leadError } = await supabase
+        // Find the lead (include user_id for multi-tenant filtering)
+        const { data: lead, error: leadError } = await supabaseAdmin
             .from('leads')
-            .select('id, page_id')
+            .select('id, page_id, user_id')
             .eq('sender_id', senderId)
             .single();
 
@@ -336,11 +345,12 @@ export async function DELETE(request: NextRequest) {
             return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
         }
 
-        // Find the pending order (cart)
-        const { data: cart, error: cartError } = await supabase
+        // Find the pending order (cart) - filter by user_id for multi-tenancy
+        const { data: cart, error: cartError } = await supabaseAdmin
             .from('orders')
             .select('id')
             .eq('lead_id', lead.id)
+            .eq('user_id', lead.user_id) // CRITICAL: Filter by user for data isolation
             .eq('status', 'pending')
             .order('created_at', { ascending: false })
             .limit(1)
@@ -354,7 +364,7 @@ export async function DELETE(request: NextRequest) {
         let items: { id: string; product_name: string }[] | null = null;
 
         if (itemId) {
-            const { data, error } = await supabase
+            const { data, error } = await supabaseAdmin
                 .from('order_items')
                 .select('id, product_name')
                 .eq('order_id', cart.id)
@@ -364,7 +374,7 @@ export async function DELETE(request: NextRequest) {
         } else if (productName) {
             // Try multiple search strategies for product name
             // 1. First try exact match with ilike
-            const { data: directMatch } = await supabase
+            const { data: directMatch } = await supabaseAdmin
                 .from('order_items')
                 .select('id, product_name')
                 .eq('order_id', cart.id)
@@ -377,7 +387,7 @@ export async function DELETE(request: NextRequest) {
                 const cleanedName = productName.replace(/[^\w\s]/g, '').trim();
                 console.log(`Trying cleaned name: "${cleanedName}"`);
 
-                const { data: cleanMatch } = await supabase
+                const { data: cleanMatch } = await supabaseAdmin
                     .from('order_items')
                     .select('id, product_name')
                     .eq('order_id', cart.id)
@@ -391,7 +401,7 @@ export async function DELETE(request: NextRequest) {
                     console.log(`Trying first word: "${firstWord}"`);
 
                     if (firstWord.length >= 3) {
-                        const { data: wordMatch } = await supabase
+                        const { data: wordMatch } = await supabaseAdmin
                             .from('order_items')
                             .select('id, product_name')
                             .eq('order_id', cart.id)
@@ -405,7 +415,7 @@ export async function DELETE(request: NextRequest) {
 
         if (!items || items.length === 0) {
             // Log what's in the cart for debugging
-            const { data: allItems } = await supabase
+            const { data: allItems } = await supabaseAdmin
                 .from('order_items')
                 .select('product_name')
                 .eq('order_id', cart.id);
@@ -417,7 +427,7 @@ export async function DELETE(request: NextRequest) {
 
         // Remove the first matching item
         const itemToRemove = items[0];
-        const { error: deleteError } = await supabase
+        const { error: deleteError } = await supabaseAdmin
             .from('order_items')
             .delete()
             .eq('id', itemToRemove.id);
@@ -436,12 +446,12 @@ export async function DELETE(request: NextRequest) {
                 const { callSendAPI } = await import('../../webhook/facebookClient');
 
                 // Get updated cart details
-                const { data: remainingItems } = await supabase
+                const { data: remainingItems } = await supabaseAdmin
                     .from('order_items')
                     .select('product_name, quantity, unit_price, variations')
                     .eq('order_id', cart.id);
 
-                const { data: updatedCart } = await supabase
+                const { data: updatedCart } = await supabaseAdmin
                     .from('orders')
                     .select('total_amount')
                     .eq('id', cart.id)

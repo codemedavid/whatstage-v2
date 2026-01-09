@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 import { getLeadEntities } from '@/app/lib/entityTrackingService';
 import { getLatestConversationSummary } from '@/app/lib/chatService';
 
@@ -16,17 +16,24 @@ export async function GET(
     { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        const userId = await getCurrentUserId();
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { id: leadId } = await params;
 
         if (!leadId) {
             return NextResponse.json({ error: 'Lead ID is required' }, { status: 400 });
         }
 
-        // Get the lead's sender_id
+        // Get the lead's sender_id (with user_id filter)
         const { data: lead, error: leadError } = await supabase
             .from('leads')
             .select('sender_id, name')
             .eq('id', leadId)
+            .eq('user_id', userId)
             .single();
 
         if (leadError || !lead) {
@@ -37,26 +44,28 @@ export async function GET(
 
         // Fetch all memory components in parallel
         const [entities, summary, importantMessages, recentActivities] = await Promise.all([
-            // 1. Structured entities
-            getLeadEntities(senderId),
+            // 1. Structured entities (with user_id)
+            getLeadEntities(senderId, userId),
 
-            // 2. Latest conversation summary
-            getLatestConversationSummary(senderId),
+            // 2. Latest conversation summary (with user_id)
+            getLatestConversationSummary(senderId, userId),
 
-            // 3. High-importance messages (score >= 2)
+            // 3. High-importance messages (score >= 2) - filter by user_id
             supabase
                 .from('conversations')
                 .select('id, role, content, importance_score, created_at')
                 .eq('sender_id', senderId)
+                .eq('user_id', userId)
                 .gte('importance_score', 2)
                 .order('created_at', { ascending: false })
                 .limit(10),
 
-            // 4. Recent activities
+            // 4. Recent activities - filter by user_id
             supabase
                 .from('lead_activities')
                 .select('*')
                 .eq('sender_id', senderId)
+                .eq('user_id', userId)
                 .order('created_at', { ascending: false })
                 .limit(10)
         ]);
@@ -97,3 +106,4 @@ export async function GET(
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }
+

@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - Get appointment settings
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('appointment_settings')
             .select('*')
+            .eq('user_id', userId)
             .limit(1)
             .single();
 
@@ -38,6 +47,13 @@ export async function GET() {
 // PUT - Update appointment settings
 export async function PUT(request: NextRequest) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await request.json();
         const {
             business_hours_start,
@@ -50,10 +66,11 @@ export async function PUT(request: NextRequest) {
             is_active
         } = body;
 
-        // Check if settings exist
+        // Check if settings exist for this user
         const { data: existing } = await supabase
             .from('appointment_settings')
             .select('id')
+            .eq('user_id', userId)
             .limit(1);
 
         let result;
@@ -72,16 +89,18 @@ export async function PUT(request: NextRequest) {
                     is_active
                 })
                 .eq('id', existing[0].id)
+                .eq('user_id', userId)
                 .select()
                 .single();
 
             if (error) throw error;
             result = data;
         } else {
-            // Create new settings
+            // Create new settings with user_id
             const { data, error } = await supabase
                 .from('appointment_settings')
                 .insert([{
+                    user_id: userId,
                     business_hours_start,
                     business_hours_end,
                     slot_duration_minutes,

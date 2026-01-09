@@ -1,12 +1,21 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - Fetch all folders
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('document_folders')
             .select('id, name, created_at')
+            .eq('user_id', userId)
             .order('created_at', { ascending: true });
 
         if (error) {
@@ -15,7 +24,7 @@ export async function GET() {
         }
 
         // Map to the format expected by the frontend
-        const folders = data.map((folder: any) => ({
+        const folders = data.map((folder) => ({
             id: folder.id,
             name: folder.name,
             isOpen: true,
@@ -31,6 +40,13 @@ export async function GET() {
 // POST - Create a new folder
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { name } = await req.json();
 
         if (!name || !name.trim()) {
@@ -40,6 +56,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('document_folders')
             .insert({
+                user_id: userId,
                 name: name.trim()
             })
             .select()
@@ -64,6 +81,13 @@ export async function POST(req: Request) {
 // DELETE - Delete a folder
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -74,7 +98,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('document_folders')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting folder:', error);

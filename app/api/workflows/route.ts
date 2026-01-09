@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // Validate UUID format
 function isValidUUID(str: string | null | undefined): boolean {
@@ -11,9 +11,18 @@ function isValidUUID(str: string | null | undefined): boolean {
 // GET /api/workflows - List all workflows
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('workflows')
             .select('*')
+            .eq('user_id', userId)
             .order('created_at', { ascending: false });
 
         if (error) throw error;
@@ -28,6 +37,13 @@ export async function GET() {
 // POST /api/workflows - Create new workflow
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { name, trigger_stage_id, trigger_type, workflow_data, prompt } = body;
 
@@ -60,6 +76,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('workflows')
             .insert({
+                user_id: userId,
                 name: finalName,
                 trigger_stage_id: (trigger_type === 'appointment_booked' || trigger_type === 'digital_product_purchased') ? null : validStageId,
                 trigger_type: trigger_type || 'stage_change',
@@ -81,6 +98,13 @@ export async function POST(req: Request) {
 // PUT /api/workflows - Update workflow
 export async function PUT(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { id, name, trigger_stage_id, trigger_type, workflow_data } = body;
 
@@ -96,6 +120,7 @@ export async function PUT(req: Request) {
                 workflow_data,
             })
             .eq('id', id)
+            .eq('user_id', userId)
             .select()
             .single();
 
@@ -107,4 +132,3 @@ export async function PUT(req: Request) {
         return NextResponse.json({ error: 'Failed to update workflow' }, { status: 500 });
     }
 }
-

@@ -1,14 +1,23 @@
 import { NextResponse } from 'next/server';
 import { addDocument } from '@/app/lib/rag';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - List all FAQ entries (documents in Q&A categories)
 export async function GET() {
     try {
-        // First get all Q&A category IDs
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
+        // First get all Q&A category IDs for this user
         const { data: qaCategories } = await supabase
             .from('knowledge_categories')
             .select('id')
+            .eq('user_id', userId)
             .eq('type', 'qa');
 
         const qaCategoryIds = qaCategories?.map(c => c.id) || [];
@@ -17,10 +26,11 @@ export async function GET() {
             return NextResponse.json([]);
         }
 
-        // Get documents in Q&A categories
+        // Get documents in Q&A categories for this user
         const { data, error } = await supabase
             .from('documents')
             .select('id, content, metadata, category_id')
+            .eq('user_id', userId)
             .in('category_id', qaCategoryIds)
             .order('id', { ascending: false });
 
@@ -54,6 +64,12 @@ export async function GET() {
 // POST - Create a new FAQ entry
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
         const { question, answer, categoryId } = await req.json();
 
         if (!question || !answer) {
@@ -65,10 +81,11 @@ export async function POST(req: Request) {
 
         console.log('[FAQ] Creating FAQ entry:', formattedContent.substring(0, 100));
 
-        // Add document with embedding - categoryId is now handled by addDocument
+        // Add document with embedding - pass userId for user isolation
         const success = await addDocument(formattedContent, {
             type: 'faq',
-            categoryId
+            categoryId,
+            userId
         });
 
         if (!success) {
@@ -91,6 +108,13 @@ export async function POST(req: Request) {
 // DELETE - Remove an FAQ entry
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -101,7 +125,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('documents')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting FAQ:', error);

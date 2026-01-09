@@ -1,33 +1,52 @@
 import { NextResponse } from 'next/server';
 import { addDocument } from '@/app/lib/rag';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 export async function GET() {
-    const { data, error } = await supabase
-        .from('documents')
-        .select('id, content, metadata, folder_id, category_id')
-        .order('id', { ascending: false })
-        .limit(50);
+    try {
+        const userId = await getCurrentUserId();
 
-    if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
+        const { data, error } = await supabase
+            .from('documents')
+            .select('id, content, metadata, folder_id, category_id, created_at')
+            .eq('user_id', userId)
+            .order('id', { ascending: false })
+            .limit(50);
+
+        if (error) {
+            return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+
+        const mappedData = data.map((item) => ({
+            id: item.id,
+            text: item.content,
+            createdAt: item.created_at ? new Date(item.created_at).toISOString() : new Date().toISOString(),
+            folderId: item.folder_id || undefined,
+            categoryId: item.category_id || undefined,
+        }));
+
+        return NextResponse.json(mappedData);
+    } catch (error) {
+        console.error('Error fetching documents:', error);
+        return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mappedData = data.map((item: any) => ({
-        id: item.id,
-        text: item.content,
-        createdAt: new Date().toISOString(),
-        folderId: item.folder_id || undefined,
-        categoryId: item.category_id || undefined,
-    }));
-
-    return NextResponse.json(mappedData);
 }
 
 // POST - Create a new document
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
         const body = await req.json();
         const { text, categoryId } = body;
 
@@ -35,7 +54,8 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: 'Text is required' }, { status: 400 });
         }
 
-        const success = await addDocument(text, { categoryId });
+        // Pass userId to addDocument so it can be stored
+        const success = await addDocument(text, { categoryId, userId });
 
         if (!success) {
             return NextResponse.json({ error: 'Failed to process document' }, { status: 500 });
@@ -43,6 +63,7 @@ export async function POST(req: Request) {
 
         return NextResponse.json({ success: true }, { status: 201 });
     } catch (error) {
+        console.error('Error creating document:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }
@@ -50,6 +71,13 @@ export async function POST(req: Request) {
 // PUT - Update existing document content
 export async function PUT(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { id, text, categoryId } = body;
 
@@ -62,14 +90,14 @@ export async function PUT(req: Request) {
         }
 
         // Update the document content and optionally the category
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updates: any = { content: text };
+        const updates: Record<string, unknown> = { content: text };
         if (categoryId !== undefined) updates.category_id = categoryId || null;
 
         const { error } = await supabase
             .from('documents')
             .update(updates)
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error updating document:', error);
@@ -86,6 +114,13 @@ export async function PUT(req: Request) {
 // PATCH - Update document's folder or category assignment
 export async function PATCH(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { id, folderId, categoryId } = await req.json();
 
         if (!id) {
@@ -93,15 +128,15 @@ export async function PATCH(req: Request) {
         }
 
         // Build update object with provided fields
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updates: any = {};
+        const updates: Record<string, unknown> = {};
         if (folderId !== undefined) updates.folder_id = folderId || null;
         if (categoryId !== undefined) updates.category_id = categoryId || null;
 
         const { error } = await supabase
             .from('documents')
             .update(updates)
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error updating document:', error);
@@ -117,6 +152,13 @@ export async function PATCH(req: Request) {
 
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -127,7 +169,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('documents')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             return NextResponse.json({ error: error.message }, { status: 500 });
@@ -135,6 +178,7 @@ export async function DELETE(req: Request) {
 
         return NextResponse.json({ success: true });
     } catch (error) {
+        console.error('Error deleting document:', error);
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }
 }

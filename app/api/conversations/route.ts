@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 /**
  * GET /api/conversations?senderId=xxx&limit=50
@@ -7,6 +7,13 @@ import { supabase } from '@/app/lib/supabase';
  */
 export async function GET(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const senderId = searchParams.get('senderId');
         const limit = parseInt(searchParams.get('limit') || '50');
@@ -22,6 +29,7 @@ export async function GET(req: Request) {
             .from('conversations')
             .select('id, role, content, created_at')
             .eq('sender_id', senderId)
+            .eq('user_id', userId)
             .order('created_at', { ascending: true })
             .limit(limit);
 

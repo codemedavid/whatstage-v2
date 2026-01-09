@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 import { executeWorkflow } from '@/app/lib/workflowEngine';
 
 export async function POST(
@@ -7,23 +8,38 @@ export async function POST(
     { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { id } = await params;
         const { is_published, apply_to_existing } = await req.json();
 
         console.log(`[ApplyToExisting] === PUBLISH REQUEST ===`);
         console.log(`[ApplyToExisting] Workflow ID: ${id}`);
+        console.log(`[ApplyToExisting] User ID: ${userId}`);
         console.log(`[ApplyToExisting] is_published: ${is_published}`);
         console.log(`[ApplyToExisting] apply_to_existing: ${apply_to_existing}`);
 
         // Update workflow with publish status and apply_to_existing setting
+        // RLS ensures only owner can update
         const { data, error } = await supabase
             .from('workflows')
             .update({ is_published, apply_to_existing: apply_to_existing || false })
             .eq('id', id)
+            .eq('user_id', userId)
             .select()
             .single();
 
-        if (error) throw error;
+        if (error) {
+            if (error.code === 'PGRST116') {
+                return NextResponse.json({ error: 'Workflow not found or not owned by user' }, { status: 404 });
+            }
+            throw error;
+        }
 
         console.log(`[ApplyToExisting] Workflow updated. trigger_stage_id: ${data.trigger_stage_id}`);
         console.log(`[ApplyToExisting] Condition check: is_published=${is_published}, apply_to_existing=${apply_to_existing}, trigger_stage_id=${data.trigger_stage_id}`);
@@ -32,25 +48,28 @@ export async function POST(
         if (is_published && apply_to_existing && data.trigger_stage_id) {
             console.log(`[ApplyToExisting] ✓ All conditions met! Fetching leads in stage ${data.trigger_stage_id}`);
 
-            // Fetch all leads currently in the trigger stage
-            const { data: leads, error: leadsError } = await supabase
+            // Fetch all leads currently in the trigger stage for this user
+            // Use supabaseAdmin to bypass RLS since we've already verified ownership
+            const { data: leads, error: leadsError } = await supabaseAdmin
                 .from('leads')
                 .select('id, sender_id')
-                .eq('current_stage_id', data.trigger_stage_id);
+                .eq('current_stage_id', data.trigger_stage_id)
+                .eq('user_id', userId);
 
             if (leadsError) {
                 console.error('[ApplyToExisting] Error fetching leads:', leadsError);
             } else if (leads && leads.length > 0) {
                 console.log(`[ApplyToExisting] Found ${leads.length} leads to trigger`);
-                console.log(`[ApplyToExisting] Lead details:`, leads.map(l => ({ id: l.id, sender_id: l.sender_id?.substring(0, 10) + '...' })));
+                console.log(`[ApplyToExisting] Lead details:`, leads.map((l: { id: string; sender_id: string | null }) => ({ id: l.id, sender_id: l.sender_id?.substring(0, 10) + '...' })));
 
                 // Check which leads already have an execution for this workflow to avoid duplicates
-                const { data: existingExecutions } = await supabase
+                const { data: existingExecutions } = await supabaseAdmin
                     .from('workflow_executions')
                     .select('lead_id')
-                    .eq('workflow_id', id);
+                    .eq('workflow_id', id)
+                    .eq('user_id', userId);
 
-                const existingLeadIds = new Set(existingExecutions?.map(e => e.lead_id) || []);
+                const existingLeadIds = new Set(existingExecutions?.map((e: { lead_id: string }) => e.lead_id) || []);
                 console.log(`[ApplyToExisting] ${existingLeadIds.size} leads already have executions, will skip those`);
 
                 // Trigger workflow for each lead that doesn't already have an execution
@@ -68,7 +87,7 @@ export async function POST(
                         }
                         console.log(`[ApplyToExisting] Executing workflow for lead: ${lead.id} (sender: ${lead.sender_id})`);
                         try {
-                            await executeWorkflow(id, lead.id, lead.sender_id, true);
+                            await executeWorkflow(id, lead.id, lead.sender_id, { skipPublishCheck: true, userId });
                             console.log(`[ApplyToExisting] ✓ Workflow completed for lead: ${lead.id}`);
                             successCount++;
                         } catch (err) {

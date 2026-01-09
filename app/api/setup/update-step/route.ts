@@ -1,22 +1,40 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
+import { createHash } from 'crypto';
+
+/**
+ * Anonymize a user ID for safe logging
+ * Uses SHA-256 hash and returns only first 8 characters
+ */
+function anonymizeUserId(userId: string): string {
+    return createHash('sha256').update(userId).digest('hex').substring(0, 8) + '...';
+}
 
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { step, data } = body;
 
-        // Get the settings ID (assuming single tenant/user for now as per existing pattern)
+        // Get the settings ID for this user
         const { data: settings, error: fetchError } = await supabase
             .from('bot_settings')
             .select('id')
+            .eq('user_id', userId)
             .single();
 
         if (fetchError || !settings) {
+            console.error('Settings not found for user:', anonymizeUserId(userId), fetchError);
             return NextResponse.json({ error: 'Settings not found' }, { status: 404 });
         }
 
-        const updates: any = {
+        const updates: Record<string, unknown> = {
             setup_step: step,
             updated_at: new Date().toISOString(),
         };
@@ -41,15 +59,12 @@ export async function POST(req: Request) {
                 updates.primary_goal = goalMapping[data.botGoal] || 'lead_generation';
             }
         }
-        // Other steps might not save directly to bot_settings columns but trigger other actions
-        // or just update the step counter.
-        // Step 2 (Product) -> Handled by separate generate call usually, or saved here if we added columns.
-        // For now, we just update the step counter if no direct column mapping.
 
         const { error } = await supabase
             .from('bot_settings')
             .update(updates)
-            .eq('id', settings.id);
+            .eq('id', settings.id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error updating setup step:', error);

@@ -40,6 +40,7 @@ interface ExecuteWorkflowOptions {
     skipPublishCheck?: boolean;
     appointmentId?: string;
     appointmentDateTime?: Date;
+    userId?: string;  // Required for multi-user isolation
 }
 
 export async function executeWorkflow(
@@ -94,7 +95,7 @@ export async function executeWorkflow(
 
     console.log('Trigger node found:', triggerNode.id);
 
-    // Create execution record
+    // Create execution record with user_id for proper isolation
     const { data: execution, error: execError } = await supabase
         .from('workflow_executions')
         .insert({
@@ -104,6 +105,7 @@ export async function executeWorkflow(
             execution_data: { senderId },
             status: 'pending',
             appointment_id: options?.appointmentId || null,
+            user_id: options?.userId || workflow.user_id || null,
         })
         .select()
         .single();
@@ -424,11 +426,27 @@ Respond with ONLY "true" or "false" based on whether the condition is met.`;
 export async function triggerWorkflowsForStage(stageId: string, leadId: string): Promise<void> {
     console.log(`Checking workflows for stage ${stageId} and lead ${leadId}`);
 
+    // First, get the stage to find its user_id for proper tenant isolation
+    const { data: stage, error: stageError } = await supabase
+        .from('pipeline_stages')
+        .select('user_id')
+        .eq('id', stageId)
+        .single();
+
+    if (stageError || !stage?.user_id) {
+        console.error('Error fetching stage or missing user_id:', stageError);
+        return;
+    }
+
+    const userId = stage.user_id;
+    console.log(`Stage belongs to user: ${userId}`);
+
     const { data: workflows, error: workflowError } = await supabase
         .from('workflows')
         .select('*')
         .eq('trigger_stage_id', stageId)
-        .eq('is_published', true);
+        .eq('is_published', true)
+        .eq('user_id', userId);
 
     if (workflowError) {
         console.error('Error fetching workflows:', workflowError);
@@ -463,28 +481,40 @@ export async function triggerWorkflowsForStage(stageId: string, leadId: string):
     for (const workflow of workflows) {
         console.log(`Executing workflow: ${workflow.name} (${workflow.id})`);
         // Skip publish check since we already filtered for published workflows
-        await executeWorkflow(workflow.id, leadId, lead.sender_id, true);
+        await executeWorkflow(workflow.id, leadId, lead.sender_id, { skipPublishCheck: true, userId });
     }
 }
 
 /**
  * Trigger workflows when an appointment is booked
  * Schedules messages relative to the appointment time (e.g., 1 day before, 1 hour before)
+ * @param appointmentId - The appointment ID
+ * @param senderId - Facebook PSID of the person who booked
+ * @param appointmentDate - Date in YYYY-MM-DD format
+ * @param startTime - Time in HH:mm:ss format
+ * @param userId - The user who owns the appointment (required for multi-tenant isolation)
  */
 export async function triggerWorkflowsForAppointment(
     appointmentId: string,
     senderId: string,
     appointmentDate: string,  // YYYY-MM-DD format
-    startTime: string         // HH:mm:ss format
+    startTime: string,        // HH:mm:ss format
+    userId?: string           // Required for multi-user isolation
 ): Promise<void> {
-    console.log(`Checking workflows for appointment ${appointmentId}`);
+    console.log(`Checking workflows for appointment ${appointmentId}, userId: ${userId}`);
 
-    // Find workflows with appointment_booked trigger
+    if (!userId) {
+        console.error('No userId provided for appointment workflow trigger');
+        return;
+    }
+
+    // Find workflows with appointment_booked trigger for this user
     const { data: workflows, error: workflowError } = await supabase
         .from('workflows')
         .select('*')
         .eq('trigger_type', 'appointment_booked')
-        .eq('is_published', true);
+        .eq('is_published', true)
+        .eq('user_id', userId);
 
     if (workflowError) {
         console.error('Error fetching appointment workflows:', workflowError);
@@ -492,21 +522,22 @@ export async function triggerWorkflowsForAppointment(
     }
 
     if (!workflows || workflows.length === 0) {
-        console.log('No appointment-triggered workflows found');
+        console.log('No appointment-triggered workflows found for user:', userId);
         return;
     }
 
     console.log(`Found ${workflows.length} appointment workflows to trigger:`, workflows.map(w => w.name));
 
-    // Get lead from sender_id
+    // Get lead from sender_id and user_id
     const { data: lead, error: leadError } = await supabase
         .from('leads')
         .select('id')
         .eq('sender_id', senderId)
+        .eq('user_id', userId)
         .single();
 
     if (leadError || !lead) {
-        console.error('Lead not found for sender:', senderId);
+        console.error('Lead not found for sender:', senderId, 'and user:', userId);
         return;
     }
 
@@ -526,6 +557,7 @@ export async function triggerWorkflowsForAppointment(
             skipPublishCheck: true,
             appointmentId,
             appointmentDateTime,
+            userId,
         });
     }
 }
@@ -536,14 +568,16 @@ export async function triggerWorkflowsForAppointment(
  * @param senderId - Facebook PSID of the purchaser (may be null for web-only purchases)
  * @param digitalProductId - The ID of the digital product that was purchased
  * @param leadId - The ID of the lead who made the purchase
+ * @param userId - The ID of the user who owns the digital product (for tenant isolation)
  */
 export async function triggerWorkflowsForDigitalPurchase(
     purchaseId: string,
     senderId: string | null,
     digitalProductId: string,
-    leadId: string
+    leadId: string,
+    userId?: string | null
 ): Promise<void> {
-    console.log(`[WorkflowEngine] Checking workflows for digital product purchase ${purchaseId}`);
+    console.log(`[WorkflowEngine] Checking workflows for digital product purchase ${purchaseId}, userId: ${userId}`);
 
     if (!senderId) {
         console.log('[WorkflowEngine] No sender ID (PSID) provided, cannot send Messenger messages');
@@ -552,11 +586,18 @@ export async function triggerWorkflowsForDigitalPurchase(
 
     // Find workflows with digital_product_purchased trigger
     // Either matching the specific product ID or any product (NULL trigger_digital_product_id)
-    const { data: workflows, error: workflowError } = await supabase
+    let query = supabase
         .from('workflows')
         .select('*')
         .eq('trigger_type', 'digital_product_purchased')
         .eq('is_published', true);
+
+    // Filter by user_id if provided for proper tenant isolation
+    if (userId) {
+        query = query.eq('user_id', userId);
+    }
+
+    const { data: workflows, error: workflowError } = await query;
 
     if (workflowError) {
         console.error('[WorkflowEngine] Error fetching digital product workflows:', workflowError);
@@ -587,6 +628,7 @@ export async function triggerWorkflowsForDigitalPurchase(
 
         await executeWorkflow(workflow.id, leadId, senderId, {
             skipPublishCheck: true,
+            userId: userId || undefined,
         });
     }
 

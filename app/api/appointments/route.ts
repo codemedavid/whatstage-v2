@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
+import { supabaseAdmin, getUserIdFromPageId } from '@/app/lib/supabaseAdmin';
 
 // GET - List appointments (optionally filter by sender_psid or date)
 export async function GET(request: NextRequest) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(request.url);
         const senderPsid = searchParams.get('sender_psid');
         const date = searchParams.get('date');
@@ -12,6 +20,7 @@ export async function GET(request: NextRequest) {
         let query = supabase
             .from('appointments')
             .select('*, properties(title, address)')
+            .eq('user_id', userId)
             .order('appointment_date', { ascending: true })
             .order('start_time', { ascending: true });
 
@@ -45,6 +54,7 @@ export async function GET(request: NextRequest) {
 }
 
 // POST - Create a new appointment
+// Supports both authenticated requests (from dashboard) and public requests (from booking page with page_id)
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
@@ -61,6 +71,18 @@ export async function POST(request: NextRequest) {
             property_id
         } = body;
 
+        // Try authenticated user first, then fall back to page_id resolution
+        let userId = await getCurrentUserId();
+
+        if (!userId && page_id) {
+            // Public booking - resolve from page_id
+            userId = await getUserIdFromPageId(page_id);
+        }
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized - missing authentication or valid page_id' }, { status: 401 });
+        }
+
         // Validate required fields
         if (!appointment_date || !start_time || !end_time) {
             return NextResponse.json(
@@ -72,10 +94,11 @@ export async function POST(request: NextRequest) {
         // If sender_psid is not provided, generate a placeholder one for non-messenger bookings
         const actualPsid = sender_psid || `web_booking_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // Check if the slot is available
-        const { data: existingAppointments, error: checkError } = await supabase
+        // Check if the slot is available for this user
+        const { data: existingAppointments, error: checkError } = await supabaseAdmin
             .from('appointments')
             .select('id')
+            .eq('user_id', userId)
             .eq('appointment_date', appointment_date)
             .eq('start_time', start_time)
             .neq('status', 'cancelled')
@@ -93,18 +116,15 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Create the appointment
-
-        // Create the appointment
-
         // Fetch Facebook Profile Name from Leads table (captured during initial contact)
         let facebookName = null;
         if (sender_psid) {
             try {
-                const { data: lead } = await supabase
+                const { data: lead } = await supabaseAdmin
                     .from('leads')
                     .select('name')
                     .eq('sender_id', sender_psid)
+                    .eq('user_id', userId)
                     .single();
 
                 if (lead && lead.name) {
@@ -115,11 +135,12 @@ export async function POST(request: NextRequest) {
             }
         }
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('appointments')
             .insert([{
+                user_id: userId,
                 sender_psid: actualPsid,
-                customer_name: customer_name || facebookName, // Fallback to FB name if manual name is empty
+                customer_name: customer_name || facebookName,
                 facebook_name: facebookName,
                 customer_email,
                 customer_phone,
@@ -158,11 +179,11 @@ export async function POST(request: NextRequest) {
                 appointmentId: data.id,
                 appointmentDate: appointment_date,
                 startTime: start_time,
-            });
+            }, userId);
 
             // Trigger appointment-based workflows
             const { triggerWorkflowsForAppointment } = await import('@/app/lib/workflowEngine');
-            await triggerWorkflowsForAppointment(data.id, actualPsid, appointment_date, start_time);
+            await triggerWorkflowsForAppointment(data.id, actualPsid, appointment_date, start_time, userId);
 
             // Trigger milestone summary generation (fire and forget)
             generateConversationSummary(actualPsid).catch(err => {
@@ -180,15 +201,14 @@ export async function POST(request: NextRequest) {
             const { callSendAPI } = await import('../webhook/facebookClient');
 
             // Parse date string and format with GMT+8 timezone (Asia/Manila)
-            // This ensures the notification shows the correct date regardless of server timezone
             const [year, month, day] = appointment_date.split('-').map(Number);
-            const dateObj = new Date(year, month - 1, day, 12, 0, 0); // Set to noon to avoid date boundary issues
+            const dateObj = new Date(year, month - 1, day, 12, 0, 0);
 
             const formattedDate = dateObj.toLocaleDateString('en-US', {
                 weekday: 'long',
                 month: 'long',
                 day: 'numeric',
-                timeZone: 'Asia/Manila' // GMT+8
+                timeZone: 'Asia/Manila'
             });
 
             // Format time (HH:mm:ss -> h:mm AM/PM)
@@ -203,10 +223,11 @@ export async function POST(request: NextRequest) {
 
             if (property_id) {
                 // Fetch property details for the confirmation message
-                const { data: propertyData } = await supabase
+                const { data: propertyData } = await supabaseAdmin
                     .from('properties')
                     .select('title, address')
                     .eq('id', property_id)
+                    .eq('user_id', userId)
                     .single();
 
                 if (propertyData) {
@@ -235,6 +256,13 @@ export async function POST(request: NextRequest) {
 // DELETE - Cancel an appointment
 export async function DELETE(request: NextRequest) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(request.url);
         const id = searchParams.get('id');
         const reason = searchParams.get('reason');
@@ -243,7 +271,7 @@ export async function DELETE(request: NextRequest) {
             return NextResponse.json({ error: 'Appointment ID is required' }, { status: 400 });
         }
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('appointments')
             .update({
                 status: 'cancelled',
@@ -251,6 +279,7 @@ export async function DELETE(request: NextRequest) {
                 cancelled_reason: reason || 'User cancelled'
             })
             .eq('id', id)
+            .eq('user_id', userId)
             .select()
             .single();
 

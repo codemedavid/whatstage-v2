@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 
 interface CheckoutBody {
     order_id: string;
@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Verify order exists and is pending
-        const { data: order, error: orderError } = await supabase
+        const { data: order, error: orderError } = await supabaseAdmin
             .from('orders')
             .select('id, lead_id, total_amount')
             .eq('id', order_id)
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
             confirmed_at: new Date().toISOString(),
         });
 
-        const { data: updateData, error: updateError } = await supabase
+        const { data: updateData, error: updateError } = await supabaseAdmin
             .from('orders')
             .update({
                 status: 'confirmed',
@@ -80,13 +80,13 @@ export async function POST(request: NextRequest) {
         console.log('Order update result:', updateData);
 
         // Fetch order items for the confirmation message
-        const { data: orderItems } = await supabase
+        const { data: orderItems } = await supabaseAdmin
             .from('order_items')
             .select('product_name, quantity, unit_price')
             .eq('order_id', order_id);
 
         // Get lead info to get page_id
-        const { data: lead } = await supabase
+        const { data: lead } = await supabaseAdmin
             .from('leads')
             .select('page_id')
             .eq('id', order.lead_id)
@@ -96,7 +96,7 @@ export async function POST(request: NextRequest) {
         if (lead?.page_id && order.lead_id) {
             try {
                 // Get sender_psid from the lead
-                const { data: leadData } = await supabase
+                const { data: leadData } = await supabaseAdmin
                     .from('leads')
                     .select('sender_id')
                     .eq('id', order.lead_id)

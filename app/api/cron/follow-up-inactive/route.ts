@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getLeadsNeedingFollowUp, sendFollowUp } from '@/app/lib/followUpService';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -8,26 +7,12 @@ export const maxDuration = 60;
 /**
  * Cron job to send follow-up messages to inactive leads
  * 
- * Controlled by auto_follow_up_enabled in bot_settings.
- * Enable/disable via Bot Configuration in the dashboard.
+ * Now properly supports multi-tenancy:
+ * - Fetches all users with follow-ups enabled
+ * - Processes each user's leads separately for data isolation
  */
 export async function GET(req: Request) {
     try {
-        // Check if auto follow-up is enabled in settings
-        const { data: settings } = await supabase
-            .from('bot_settings')
-            .select('auto_follow_up_enabled')
-            .limit(1)
-            .single();
-
-        if (!settings?.auto_follow_up_enabled) {
-            console.log('[FollowUpCron] Auto follow-ups disabled in settings.');
-            return NextResponse.json({
-                processed: 0,
-                message: 'Auto follow-ups disabled. Enable in Bot Configuration.'
-            });
-        }
-
         // Verify cron secret to prevent unauthorized access
         const authHeader = req.headers.get('authorization');
         const cronSecret = process.env.CRON_SECRET;
@@ -38,45 +23,88 @@ export async function GET(req: Request) {
             return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
 
-        console.log('[FollowUpCron] Starting follow-up check...');
+        console.log('[FollowUpCron] Starting multi-user follow-up check...');
 
-        // Get leads that need follow-up right now
-        const leads = await getLeadsNeedingFollowUp(10);
+        // Get all users with follow-up enabled
+        const { data: usersWithFollowUp, error: settingsError } = await supabaseAdmin
+            .from('follow_up_settings')
+            .select('user_id, is_enabled')
+            .eq('is_enabled', true);
 
-        if (leads.length === 0) {
-            console.log('[FollowUpCron] No leads need follow-up');
-            return NextResponse.json({ processed: 0, message: 'No leads need follow-up' });
+        if (settingsError) {
+            console.error('[FollowUpCron] Error fetching follow-up settings:', settingsError);
+            return NextResponse.json({ error: 'Failed to fetch settings' }, { status: 500 });
         }
 
-        console.log(`[FollowUpCron] Found ${leads.length} leads to follow up`);
+        if (!usersWithFollowUp || usersWithFollowUp.length === 0) {
+            console.log('[FollowUpCron] No users have follow-ups enabled.');
+            return NextResponse.json({
+                processed: 0,
+                message: 'No users have auto follow-ups enabled.'
+            });
+        }
 
-        let successCount = 0;
-        let failCount = 0;
+        console.log(`[FollowUpCron] Found ${usersWithFollowUp.length} users with follow-ups enabled`);
 
-        // Process each lead
-        for (const lead of leads) {
+        let totalProcessed = 0;
+        let totalSuccess = 0;
+        let totalFailed = 0;
+
+        // Process each user separately for proper data isolation
+        for (const userSetting of usersWithFollowUp) {
+            const userId = userSetting.user_id;
+
+            if (!userId) {
+                console.warn('[FollowUpCron] Skipping follow-up setting with null user_id');
+                continue;
+            }
+
             try {
-                const success = await sendFollowUp(lead);
-                if (success) {
-                    successCount++;
-                } else {
-                    failCount++;
+                // Import the service functions dynamically to get user-scoped versions
+                const { getLeadsNeedingFollowUpForUser, sendFollowUpForUser } = await import('@/app/lib/followUpService');
+
+                // Get leads that need follow-up for this specific user
+                const leads = await getLeadsNeedingFollowUpForUser(userId, 10);
+
+                if (leads.length === 0) {
+                    console.log(`[FollowUpCron] No leads need follow-up for user ${userId.substring(0, 8)}...`);
+                    continue;
                 }
-            } catch (error) {
-                console.error(`[FollowUpCron] Error processing lead ${lead.id}:`, error);
-                failCount++;
+
+                console.log(`[FollowUpCron] Found ${leads.length} leads to follow up for user ${userId.substring(0, 8)}...`);
+
+                // Process each lead
+                for (const lead of leads) {
+                    try {
+                        const success = await sendFollowUpForUser(lead, userId);
+                        if (success) {
+                            totalSuccess++;
+                        } else {
+                            totalFailed++;
+                        }
+                        totalProcessed++;
+                    } catch (error) {
+                        console.error(`[FollowUpCron] Error processing lead ${lead.id}:`, error);
+                        totalFailed++;
+                        totalProcessed++;
+                    }
+                }
+            } catch (userError) {
+                console.error(`[FollowUpCron] Error processing user ${userId.substring(0, 8)}...:`, userError);
             }
         }
 
-        console.log(`[FollowUpCron] Complete: ${successCount} sent, ${failCount} failed`);
+        console.log(`[FollowUpCron] Complete: ${totalSuccess} sent, ${totalFailed} failed across ${usersWithFollowUp.length} users`);
 
         return NextResponse.json({
-            processed: leads.length,
-            success: successCount,
-            failed: failCount,
+            processed: totalProcessed,
+            success: totalSuccess,
+            failed: totalFailed,
+            usersProcessed: usersWithFollowUp.length,
         });
     } catch (error) {
         console.error('[FollowUpCron] Cron error:', error);
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
 }
+

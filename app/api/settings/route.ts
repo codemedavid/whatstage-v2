@@ -1,23 +1,36 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - Fetch settings from database
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('bot_settings')
             .select('*')
+            .eq('user_id', userId)
             .limit(1)
             .single();
 
         if (error) {
             console.error('Error fetching settings:', error);
-            // Return defaults if no settings exist
+            // Return defaults if no settings exist - but still indicate setup needed
             return NextResponse.json({
                 botName: 'Assistant',
                 botTone: 'helpful and professional',
                 facebookVerifyToken: 'TEST_TOKEN',
                 facebookPageAccessToken: '',
+                isSetupCompleted: false,
+                setupStep: 1,
+                businessName: '',
+                businessDescription: '',
             });
         }
 
@@ -47,10 +60,17 @@ export async function GET() {
 // POST - Update settings in database
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
 
         // Map frontend field names to database column names
-        const updates: Record<string, any> = {
+        const updates: Record<string, unknown> = {
             updated_at: new Date().toISOString(),
         };
 
@@ -64,10 +84,11 @@ export async function POST(req: Request) {
         if (body.autoFollowUpEnabled !== undefined) updates.auto_follow_up_enabled = body.autoFollowUpEnabled;
         if (body.primaryGoal !== undefined) updates.primary_goal = body.primaryGoal;
 
-        // Check if settings row exists
+        // Check if settings row exists for this user
         const { data: existing } = await supabase
             .from('bot_settings')
             .select('id')
+            .eq('user_id', userId)
             .limit(1)
             .single();
 
@@ -76,17 +97,19 @@ export async function POST(req: Request) {
             const { error } = await supabase
                 .from('bot_settings')
                 .update(updates)
-                .eq('id', existing.id);
+                .eq('id', existing.id)
+                .eq('user_id', userId);
 
             if (error) {
                 console.error('Error updating settings:', error);
                 return NextResponse.json({ error: 'Failed to update settings' }, { status: 500 });
             }
         } else {
-            // Insert new row
+            // Insert new row with user_id
             const { error } = await supabase
                 .from('bot_settings')
                 .insert({
+                    user_id: userId,
                     bot_name: body.botName || 'Assistant',
                     bot_tone: body.botTone || 'helpful and professional',
                     facebook_verify_token: body.facebookVerifyToken || 'TEST_TOKEN',

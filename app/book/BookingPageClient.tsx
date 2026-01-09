@@ -156,7 +156,7 @@ export default function BookingPageClient({
         try {
             // Use local date formatting to avoid UTC conversion issues
             const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-            const res = await fetch(`/api/appointments/available?date=${dateStr}`);
+            const res = await fetch(`/api/appointments/available?date=${dateStr}&pageId=${pageId}`);
             const data: AvailableSlotsResponse = await res.json();
 
             if (!data.available) {

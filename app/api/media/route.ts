@@ -1,12 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import {
-    addMedia,
-    getAllMedia,
-    updateMedia,
-    deleteMedia,
-    getMediaById
-} from '@/app/lib/mediaLibraryService';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 import {
     inferMediaTypeFromUrl,
     generateVideoThumbnail,
@@ -47,27 +41,45 @@ export async function GET(request: Request) {
     const startTime = Date.now();
 
     try {
-        const { searchParams } = new URL(request.url);
-        const categoryId = searchParams.get('categoryId') || undefined;
-        const isActive = searchParams.get('isActive');
-        const mediaType = searchParams.get('mediaType') || undefined;
-        const page = parseInt(searchParams.get('page') || '1', 10);
-        const limit = parseInt(searchParams.get('limit') || '20', 10);
+        const userId = await getCurrentUserId();
+        if (!userId) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+        }
 
-        const media = await getAllMedia({
-            categoryId,
-            isActive: isActive !== null ? isActive === 'true' : undefined,
-            mediaType,
-            page,
-            limit,
-        });
+        const supabase = await createClient();
+        const { searchParams } = new URL(request.url);
+        const categoryId = searchParams.get('categoryId');
+        const isActive = searchParams.get('isActive');
+        const mediaType = searchParams.get('mediaType');
+
+        let query = supabase
+            .from('media_library')
+            .select('*')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
+
+        if (categoryId) query = query.eq('category_id', categoryId);
+        if (isActive !== undefined && isActive !== null && isActive !== '') {
+            query = query.eq('is_active', isActive === 'true');
+        }
+        if (mediaType) query = query.eq('media_type', mediaType);
+
+        const { data, error } = await query;
+
+        if (error) {
+            console.error('Error fetching media:', error);
+            return NextResponse.json(
+                { success: false, error: 'Failed to fetch media', code: 'FETCH_FAILED' },
+                { status: 500 }
+            );
+        }
 
         logMediaOperation({
             operation: 'list',
             duration: Date.now() - startTime,
         });
 
-        return NextResponse.json({ success: true, media });
+        return NextResponse.json({ success: true, media: data || [] });
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to fetch media';
         logMediaOperation({ operation: 'list_error', error: message });
@@ -88,6 +100,11 @@ export async function POST(request: Request) {
     const startTime = Date.now();
 
     try {
+        const userId = await getCurrentUserId();
+        if (!userId) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+        }
+
         const body = await request.json();
 
         // Validate input
@@ -111,17 +128,32 @@ export async function POST(request: Request) {
             thumbnailUrl = generateVideoThumbnail(data.mediaUrl);
         }
 
-        // Add to database with embedding
-        const media = await addMedia({
-            title: data.title,
-            description: data.description,
-            mediaUrl: data.mediaUrl,
-            mediaType: resolvedMediaType,
-            categoryId: data.categoryId || undefined,
-            keywords: data.keywords,
-            triggerPhrases: data.triggerPhrases,
-            thumbnailUrl: thumbnailUrl || undefined,
-        });
+        const supabase = await createClient();
+
+        const { data: media, error } = await supabase
+            .from('media_library')
+            .insert({
+                user_id: userId,
+                title: data.title,
+                description: data.description,
+                media_url: data.mediaUrl,
+                media_type: resolvedMediaType,
+                category_id: data.categoryId || null,
+                keywords: data.keywords,
+                trigger_phrases: data.triggerPhrases,
+                thumbnail_url: thumbnailUrl,
+                is_active: true,
+            })
+            .select()
+            .single();
+
+        if (error) {
+            console.error('Error creating media:', error);
+            return NextResponse.json(
+                { success: false, error: 'Failed to create media', code: 'CREATE_FAILED' },
+                { status: 500 }
+            );
+        }
 
         logMediaOperation({
             operation: 'create',
@@ -155,6 +187,11 @@ export async function PUT(request: Request) {
     const startTime = Date.now();
 
     try {
+        const userId = await getCurrentUserId();
+        if (!userId) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+        }
+
         const body = await request.json();
 
         // Validate input
@@ -168,9 +205,28 @@ export async function PUT(request: Request) {
         }
 
         const { id, ...updates } = validation.data;
-        const media = await updateMedia(id, updates);
+        const supabase = await createClient();
 
-        if (!media) {
+        // Build update object with snake_case
+        const updateData: Record<string, unknown> = {};
+        if (updates.title !== undefined) updateData.title = updates.title;
+        if (updates.description !== undefined) updateData.description = updates.description;
+        if (updates.categoryId !== undefined) updateData.category_id = updates.categoryId;
+        if (updates.keywords !== undefined) updateData.keywords = updates.keywords;
+        if (updates.triggerPhrases !== undefined) updateData.trigger_phrases = updates.triggerPhrases;
+        if (updates.isActive !== undefined) updateData.is_active = updates.isActive;
+        if (updates.thumbnailUrl !== undefined) updateData.thumbnail_url = updates.thumbnailUrl;
+        updateData.updated_at = new Date().toISOString();
+
+        const { data: media, error } = await supabase
+            .from('media_library')
+            .update(updateData)
+            .eq('id', id)
+            .eq('user_id', userId)
+            .select()
+            .single();
+
+        if (error || !media) {
             return NextResponse.json(
                 { success: false, error: 'Media not found or update failed', code: 'NOT_FOUND' },
                 { status: 404 }
@@ -202,6 +258,11 @@ export async function DELETE(request: Request) {
     const startTime = Date.now();
 
     try {
+        const userId = await getCurrentUserId();
+        if (!userId) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+        }
+
         const { searchParams } = new URL(request.url);
         const id = searchParams.get('id');
         const hard = searchParams.get('hard') === 'true';
@@ -222,25 +283,36 @@ export async function DELETE(request: Request) {
             );
         }
 
-        // Get media info before delete (for potential Cloudinary cleanup)
+        const supabase = await createClient();
+
         if (hard) {
-            const media = await getMediaById(id);
-            if (!media) {
+            // Hard delete
+            const { error } = await supabase
+                .from('media_library')
+                .delete()
+                .eq('id', id)
+                .eq('user_id', userId);
+
+            if (error) {
                 return NextResponse.json(
-                    { success: false, error: 'Media not found', code: 'NOT_FOUND' },
-                    { status: 404 }
+                    { success: false, error: 'Failed to delete media', code: 'DELETE_FAILED' },
+                    { status: 500 }
                 );
             }
-            // Note: Cloudinary cleanup could be added here if needed
-        }
+        } else {
+            // Soft delete (set is_active to false)
+            const { error } = await supabase
+                .from('media_library')
+                .update({ is_active: false, updated_at: new Date().toISOString() })
+                .eq('id', id)
+                .eq('user_id', userId);
 
-        const success = await deleteMedia(id, hard);
-
-        if (!success) {
-            return NextResponse.json(
-                { success: false, error: 'Failed to delete media', code: 'DELETE_FAILED' },
-                { status: 500 }
-            );
+            if (error) {
+                return NextResponse.json(
+                    { success: false, error: 'Failed to deactivate media', code: 'DELETE_FAILED' },
+                    { status: 500 }
+                );
+            }
         }
 
         logMediaOperation({

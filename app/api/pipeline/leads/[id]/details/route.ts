@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 export async function GET(
     request: NextRequest,
-    { params }: { params: Promise<{ id: string }> } // Awaiting params helper for Next.js 15
+    { params }: { params: Promise<{ id: string }> }
 ) {
     try {
+        const userId = await getCurrentUserId();
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { id: leadId } = await params;
 
         if (!leadId) {
             return NextResponse.json({ error: 'Lead ID is required' }, { status: 400 });
         }
 
-        // 1. Fetch Basic Lead Info
+        // 1. Fetch Basic Lead Info (with user_id filter via RLS + explicit check)
         const { data: lead, error: leadError } = await supabase
             .from('leads')
             .select(`
@@ -24,28 +30,29 @@ export async function GET(
                 )
             `)
             .eq('id', leadId)
+            .eq('user_id', userId)
             .single();
 
         if (leadError || !lead) {
             return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
         }
 
-        // 2. Fetch Appointments (using sender_psid from lead.sender_id)
-        // Note: Appointments table uses sender_psid, leads table uses sender_id. They should match.
+        // 2. Fetch Appointments (filter by user_id)
         const { data: appointments, error: apptError } = await supabase
             .from('appointments')
             .select('*')
             .eq('sender_psid', lead.sender_id)
-            .order('appointment_date', { ascending: false }); // Newest first
+            .eq('user_id', userId)
+            .order('appointment_date', { ascending: false });
 
         console.log('Fetching details for lead:', leadId);
 
-        // 3. Fetch All Orders (Cart + History)
-        // Robustness: Find all lead_ids for this sender to ensure we catch orders attached to duplicate lead records
+        // 3. Fetch All Orders (Cart + History) - filter by user_id
         const { data: allLeads } = await supabase
             .from('leads')
             .select('id')
-            .eq('sender_id', lead.sender_id);
+            .eq('sender_id', lead.sender_id)
+            .eq('user_id', userId);
 
         const allLeadIds = allLeads?.map(l => l.id) || [leadId];
 
@@ -65,6 +72,7 @@ export async function GET(
                 )
             `)
             .in('lead_id', allLeadIds)
+            .eq('user_id', userId)
             .order('created_at', { ascending: false });
 
         if (ordersError) {
@@ -73,7 +81,7 @@ export async function GET(
             console.log(`Orders found for sender ${lead.sender_id}:`, orders?.length || 0);
         }
 
-        // 4. Fetch Digital Product Purchases (by facebook_psid which matches lead.sender_id)
+        // 4. Fetch Digital Product Purchases (filter by user_id)
         const { data: digitalOrders, error: digitalOrdersError } = await supabase
             .from('digital_product_purchases')
             .select(`
@@ -91,6 +99,7 @@ export async function GET(
                 )
             `)
             .eq('facebook_psid', lead.sender_id)
+            .eq('user_id', userId)
             .order('created_at', { ascending: false });
 
         if (digitalOrdersError) {
@@ -99,7 +108,7 @@ export async function GET(
             console.log(`Digital orders found for sender ${lead.sender_id}:`, digitalOrders?.length || 0);
         }
 
-        // 5. Fetch Lead Activity (Stage History)
+        // 5. Fetch Lead Activity (Stage History) - filter by user_id
         const { data: activity, error: activityError } = await supabase
             .from('lead_stage_history')
             .select(`
@@ -108,12 +117,13 @@ export async function GET(
                 to_stage: to_stage_id (name)
             `)
             .eq('lead_id', leadId)
+            .eq('user_id', userId)
             .order('created_at', { ascending: false });
 
         return NextResponse.json({
             lead: {
                 ...lead,
-                stage: lead.pipeline_stages // Flatten stage info
+                stage: lead.pipeline_stages
             },
             appointments: appointments || [],
             orders: orders || [],

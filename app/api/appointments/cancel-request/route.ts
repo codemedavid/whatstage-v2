@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin, getUserIdFromPageId } from '@/app/lib/supabaseAdmin';
 import { sendCancellationConfirmation } from '@/app/api/webhook/facebookClient';
 
 // POST - Request appointment cancellation (sends confirmation to Messenger)
@@ -15,11 +15,28 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Fetch the appointment details
-        const { data: appointment, error: fetchError } = await supabase
+        if (!page_id) {
+            return NextResponse.json(
+                { error: 'Page ID is required' },
+                { status: 400 }
+            );
+        }
+
+        // Resolve user_id from page_id
+        const userId = await getUserIdFromPageId(page_id);
+        if (!userId) {
+            return NextResponse.json(
+                { error: 'Invalid page ID - page not found or inactive' },
+                { status: 400 }
+            );
+        }
+
+        // Fetch the appointment details - must belong to resolved user
+        const { data: appointment, error: fetchError } = await supabaseAdmin
             .from('appointments')
             .select('*')
             .eq('id', appointment_id)
+            .eq('user_id', userId)
             .single();
 
         if (fetchError || !appointment) {
@@ -91,3 +108,4 @@ export async function POST(request: NextRequest) {
         );
     }
 }
+

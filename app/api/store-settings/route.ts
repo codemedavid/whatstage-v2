@@ -1,14 +1,22 @@
-
 import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - Fetch current store settings
-export async function GET(req: Request) {
+export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('store_settings')
             .select('*')
+            .eq('user_id', userId)
             .single();
 
         if (error && error.code !== 'PGRST116') { // PGRST116 is no rows returned, which is fine for first time
@@ -27,6 +35,13 @@ export async function GET(req: Request) {
 // POST - Create or Update store settings
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { storeName, storeType, setupCompleted, id } = body;
 
@@ -46,24 +61,27 @@ export async function POST(req: Request) {
             query = supabase
                 .from('store_settings')
                 .update(payload)
-                .eq('id', id);
+                .eq('id', id)
+                .eq('user_id', userId);
         } else {
-            // Check if one exists first to prevent duplicates in single-tenant enforcement
+            // Check if one exists for this user first
             const { data: existing } = await supabase
                 .from('store_settings')
                 .select('id')
+                .eq('user_id', userId)
                 .single();
 
             if (existing) {
                 query = supabase
                     .from('store_settings')
                     .update(payload)
-                    .eq('id', existing.id);
+                    .eq('id', existing.id)
+                    .eq('user_id', userId);
             } else {
-                // Insert new
+                // Insert new with user_id
                 query = supabase
                     .from('store_settings')
-                    .insert(payload);
+                    .insert({ ...payload, user_id: userId });
             }
         }
 

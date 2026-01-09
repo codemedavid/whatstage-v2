@@ -1,16 +1,23 @@
-
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - List all properties
 export async function GET(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const activeOnly = searchParams.get('activeOnly') === 'true';
 
         let query = supabase
             .from('properties')
             .select('*')
+            .eq('user_id', userId)
             .order('created_at', { ascending: false });
 
         if (activeOnly) {
@@ -34,6 +41,13 @@ export async function GET(req: Request) {
 // POST - Create new property
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const {
             title, description, price, currency, address,
@@ -54,6 +68,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('properties')
             .insert({
+                user_id: userId,
                 title,
                 description: description || null,
                 price: price || null,
@@ -93,6 +108,13 @@ export async function POST(req: Request) {
 // PATCH - Update property
 export async function PATCH(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { id, ...updates } = body;
 
@@ -101,7 +123,7 @@ export async function PATCH(req: Request) {
         }
 
         // Map camelCase to snake_case for DB
-        const dbUpdates: any = {};
+        const dbUpdates: Record<string, unknown> = {};
         if (updates.title !== undefined) dbUpdates.title = updates.title;
         if (updates.description !== undefined) dbUpdates.description = updates.description;
         if (updates.price !== undefined) dbUpdates.price = updates.price;
@@ -135,6 +157,7 @@ export async function PATCH(req: Request) {
             .from('properties')
             .update(dbUpdates)
             .eq('id', id)
+            .eq('user_id', userId)
             .select()
             .single();
 
@@ -153,6 +176,13 @@ export async function PATCH(req: Request) {
 // DELETE - Delete property
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -163,7 +193,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('properties')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting property:', error);

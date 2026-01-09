@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { supabase } from './supabase';
+import { supabaseAdmin } from './supabaseAdmin';
 import { addDocument } from './rag';
 
 const client = new OpenAI({
@@ -29,9 +29,10 @@ interface FlowPreferences {
  */
 export async function generateKnowledgeBase(
     business: BusinessInfo,
-    products: ProductInfo
+    products: ProductInfo,
+    userId: string
 ) {
-    console.log('[SetupService] Generating knowledge for:', business.name);
+    console.log('[SetupService] Generating knowledge for:', business.name, 'user:', userId);
 
     const systemPrompt = `You are an expert technical writer and knowledge base architect.
     Your task is to generate clear, structured knowledge base articles based on the provided business and product information.
@@ -81,10 +82,11 @@ export async function generateKnowledgeBase(
         const documents = JSON.parse(content);
 
         // Save documents to knowledge_base using addDocument
-        // We'll search for the 'General' category first
-        const { data: categories } = await supabase
+        // We'll search for the 'General' category for this user first
+        const { data: categories } = await supabaseAdmin
             .from('knowledge_categories')
             .select('id')
+            .eq('user_id', userId)
             .eq('name', 'General')
             .single();
 
@@ -98,7 +100,8 @@ export async function generateKnowledgeBase(
                     source: 'setup_wizard',
                     type: 'generated',
                     title: doc.title,
-                    categoryId: categoryId
+                    categoryId: categoryId,
+                    userId: userId
                 }
             );
             results.push(success);
@@ -117,9 +120,10 @@ export async function generateKnowledgeBase(
  */
 export async function generateBotConfiguration(
     business: BusinessInfo,
-    preferences: FlowPreferences
+    preferences: FlowPreferences,
+    userId: string
 ) {
-    console.log('[SetupService] Generating config for flow:', preferences.style);
+    console.log('[SetupService] Generating config for flow:', preferences.style, 'user:', userId);
 
     const systemPrompt = `You are an expert AI assistant configuration designer.
     Your task is to analyze the user's desired workflow and create task-oriented instructions for the bot.
@@ -183,51 +187,77 @@ export async function generateBotConfiguration(
 
         const config = JSON.parse(content);
 
-        // Update bot_settings with tone
-        const { data: settings } = await supabase.from('bot_settings').select('id').single();
+        // Update bot_settings with tone for this user
+        const { data: settings } = await supabaseAdmin
+            .from('bot_settings')
+            .select('id')
+            .eq('user_id', userId)
+            .single();
+
         if (settings) {
-            await supabase
+            await supabaseAdmin
                 .from('bot_settings')
                 .update({ bot_tone: config.botTone })
-                .eq('id', settings.id);
+                .eq('id', settings.id)
+                .eq('user_id', userId);
             console.log('[SetupService] Updated bot_tone:', config.botTone);
         }
 
         // Save system prompt to bot_instructions table
         if (config.systemPrompt) {
-            // Check if instructions exist
-            const { data: existing } = await supabase
+            // Check if instructions exist for this user
+            const { data: existing } = await supabaseAdmin
                 .from('bot_instructions')
                 .select('id')
+                .eq('user_id', userId)
                 .limit(1)
                 .single();
 
             if (existing) {
                 // Update existing
-                await supabase
+                await supabaseAdmin
                     .from('bot_instructions')
                     .update({ instructions: config.systemPrompt, updated_at: new Date().toISOString() })
-                    .eq('id', existing.id);
+                    .eq('id', existing.id)
+                    .eq('user_id', userId);
                 console.log('[SetupService] Updated bot_instructions');
             } else {
-                // Insert new
-                await supabase
+                // Insert new with user_id
+                await supabaseAdmin
                     .from('bot_instructions')
-                    .insert({ instructions: config.systemPrompt });
+                    .insert({
+                        user_id: userId,
+                        instructions: config.systemPrompt
+                    });
                 console.log('[SetupService] Created bot_instructions');
             }
         }
 
-        // Add rules to bot_rules table
+        // Add rules to bot_rules table with user_id
+        // First delete existing rules to prevent duplicates on re-run
         if (config.rules && Array.isArray(config.rules)) {
+            // Delete existing rules for this user first
+            const { error: deleteError } = await supabaseAdmin
+                .from('bot_rules')
+                .delete()
+                .eq('user_id', userId);
+
+            if (deleteError) {
+                console.error('[SetupService] Error deleting existing rules:', deleteError);
+                // Continue anyway - insertion may still work if rules didn't exist
+            } else {
+                console.log('[SetupService] Cleared existing rules for user');
+            }
+
             const rulesToInsert = config.rules.map((rule: string, index: number) => ({
+                user_id: userId,
                 rule: rule,
                 enabled: true,
                 priority: index + 1,
                 category: 'general'
             }));
 
-            const { error: rulesError } = await supabase.from('bot_rules').insert(rulesToInsert);
+            const { error: rulesError } = await supabaseAdmin.from('bot_rules').insert(rulesToInsert);
             if (rulesError) {
                 console.error('[SetupService] Error inserting rules:', rulesError);
             } else {

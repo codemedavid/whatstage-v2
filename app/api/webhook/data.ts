@@ -1,4 +1,4 @@
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 
 // Payment method type
 export interface PaymentMethod {
@@ -35,14 +35,21 @@ export interface Property {
 }
 
 // Fetch active products from database
-export async function getProducts(): Promise<Product[]> {
+// userId parameter is used to filter products for a specific user
+export async function getProducts(userId?: string): Promise<Product[]> {
     try {
-        const { data, error } = await supabase
+        let query = supabaseAdmin
             .from('products')
             .select('*')
             .eq('is_active', true)
             .order('display_order', { ascending: true })
             .limit(10); // Limit to 10 for carousel
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query;
 
         if (error || !data) {
             console.log('No products found or error:', error);
@@ -57,21 +64,27 @@ export async function getProducts(): Promise<Product[]> {
 }
 
 // Fetch active properties from database
-export async function getProperties(): Promise<Property[]> {
+export async function getProperties(userId?: string): Promise<Property[]> {
     try {
-        const { data, error } = await supabase
+        let query = supabaseAdmin
             .from('properties')
             .select('*')
             .eq('is_active', true)
             .order('created_at', { ascending: false })
             .limit(10); // Limit to 10 for carousel
 
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query;
+
         if (error || !data) {
             console.log('No properties found or error:', error);
             return [];
         }
 
-        return data; // Supabase returns generic types, casting happens at consumption or strictly here if needed
+        return data;
     } catch (error) {
         console.error('Error fetching properties:', error);
         return [];
@@ -80,13 +93,19 @@ export async function getProperties(): Promise<Property[]> {
 
 
 // Fetch active payment methods from database
-export async function getPaymentMethods(): Promise<PaymentMethod[]> {
+export async function getPaymentMethods(userId?: string): Promise<PaymentMethod[]> {
     try {
-        const { data, error } = await supabase
+        let query = supabaseAdmin
             .from('payment_methods')
             .select('*')
             .eq('is_active', true)
             .order('display_order', { ascending: true });
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query;
 
         if (error || !data) {
             console.log('No payment methods found or error:', error);
@@ -101,23 +120,30 @@ export async function getPaymentMethods(): Promise<PaymentMethod[]> {
 }
 
 // Fetch a single product by ID with its variations count
-export async function getProductById(productId: string): Promise<{ product: Product | null; hasVariations: boolean }> {
+export async function getProductById(productId: string, userId?: string): Promise<{ product: Product | null; hasVariations: boolean }> {
     try {
-        const { data: product, error: productError } = await supabase
+        let query = supabaseAdmin
             .from('products')
             .select('*')
-            .eq('id', productId)
-            .single();
+            .eq('id', productId);
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data: product, error: productError } = await query.single();
 
         if (productError || !product) {
             return { product: null, hasVariations: false };
         }
 
         // Check if product has variations
-        const { count, error: variationsError } = await supabase
+        let variationsQuery = supabaseAdmin
             .from('product_variations')
             .select('*', { count: 'exact', head: true })
             .eq('product_id', productId);
+
+        const { count, error: variationsError } = await variationsQuery;
 
         if (variationsError) {
             console.error('Error checking variations:', variationsError);
@@ -132,13 +158,18 @@ export async function getProductById(productId: string): Promise<{ product: Prod
 }
 
 // Fetch a single property by ID
-export async function getPropertyById(propertyId: string): Promise<Property | null> {
+export async function getPropertyById(propertyId: string, userId?: string): Promise<Property | null> {
     try {
-        const { data: property, error } = await supabase
+        let query = supabaseAdmin
             .from('properties')
             .select('*')
-            .eq('id', propertyId)
-            .single();
+            .eq('id', propertyId);
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data: property, error } = await query.single();
 
         if (error || !property) {
             console.log('Property not found:', propertyId, error);
@@ -166,9 +197,9 @@ export interface DigitalProduct {
 }
 
 // Fetch active digital products from database
-export async function getDigitalProducts(): Promise<DigitalProduct[]> {
+export async function getDigitalProducts(userId?: string): Promise<DigitalProduct[]> {
     try {
-        const { data, error } = await supabase
+        let query = supabaseAdmin
             .from('digital_products')
             .select(`
                 id,
@@ -185,6 +216,12 @@ export async function getDigitalProducts(): Promise<DigitalProduct[]> {
             .eq('is_active', true)
             .order('display_order', { ascending: true })
             .limit(10); // Limit to 10 for carousel
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query;
 
         if (error || !data) {
             console.log('No digital products found or error:', error);
@@ -203,9 +240,9 @@ export async function getDigitalProducts(): Promise<DigitalProduct[]> {
 }
 
 // Fetch a single digital product by ID
-export async function getDigitalProductById(productId: string): Promise<DigitalProduct | null> {
+export async function getDigitalProductById(productId: string, userId?: string): Promise<DigitalProduct | null> {
     try {
-        const { data: product, error } = await supabase
+        let query = supabaseAdmin
             .from('digital_products')
             .select(`
                 id,
@@ -219,8 +256,13 @@ export async function getDigitalProductById(productId: string): Promise<DigitalP
                 billing_interval_months,
                 media:digital_product_media(media_url, thumbnail_url)
             `)
-            .eq('id', productId)
-            .single();
+            .eq('id', productId);
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data: product, error } = await query.single();
 
         if (error || !product) {
             console.log('Digital product not found:', productId, error);
@@ -237,4 +279,3 @@ export async function getDigitalProductById(productId: string): Promise<DigitalP
         return null;
     }
 }
-

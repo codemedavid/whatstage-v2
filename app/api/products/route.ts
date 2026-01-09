@@ -1,9 +1,16 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - List all products (optionally filtered by category)
 export async function GET(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const categoryId = searchParams.get('categoryId');
         const activeOnly = searchParams.get('activeOnly') === 'true';
@@ -14,6 +21,7 @@ export async function GET(req: Request) {
                 *,
                 category:product_categories(id, name, color)
             `)
+            .eq('user_id', userId)
             .order('display_order', { ascending: true });
 
         if (categoryId) {
@@ -41,6 +49,13 @@ export async function GET(req: Request) {
 // POST - Create new product
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { name, description, price, imageUrl, categoryId, displayOrder } = body;
 
@@ -51,6 +66,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('products')
             .insert({
+                user_id: userId,
                 name,
                 description: description || null,
                 price: price || null,
@@ -81,6 +97,13 @@ export async function POST(req: Request) {
 // PATCH - Update product
 export async function PATCH(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { id, name, description, price, imageUrl, categoryId, isActive, displayOrder } = body;
 
@@ -102,6 +125,7 @@ export async function PATCH(req: Request) {
             .from('products')
             .update(updates)
             .eq('id', id)
+            .eq('user_id', userId)
             .select(`
                 *,
                 category:product_categories(id, name, color)
@@ -123,6 +147,13 @@ export async function PATCH(req: Request) {
 // DELETE - Delete product
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -133,7 +164,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('products')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting product:', error);

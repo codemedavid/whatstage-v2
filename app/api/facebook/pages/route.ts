@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 import { subscribePageWebhook, unsubscribePageWebhook } from '@/app/lib/facebookSubscriptionService';
 
 interface ConnectedPage {
@@ -16,9 +16,18 @@ interface ConnectedPage {
 // GET - List all connected pages
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('connected_pages')
             .select('id, page_id, page_name, is_active, webhook_subscribed, profile_pic, created_at')
+            .eq('user_id', userId)
             .order('created_at', { ascending: false });
 
         if (error) {
@@ -37,6 +46,13 @@ export async function GET() {
 // POST - Connect a new page
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { pageId, pageName, pageAccessToken, profilePic } = body;
 
@@ -47,11 +63,12 @@ export async function POST(req: Request) {
             );
         }
 
-        // Check if page already exists
+        // Check if page already exists for this user
         const { data: existing } = await supabase
             .from('connected_pages')
             .select('id')
             .eq('page_id', pageId)
+            .eq('user_id', userId)
             .single();
 
         if (existing) {
@@ -65,17 +82,19 @@ export async function POST(req: Request) {
                     is_active: true,
                     updated_at: new Date().toISOString(),
                 })
-                .eq('id', existing.id);
+                .eq('id', existing.id)
+                .eq('user_id', userId);
 
             if (updateError) {
                 console.error('Error updating page:', updateError);
                 return NextResponse.json({ error: 'Failed to update page' }, { status: 500 });
             }
         } else {
-            // Insert new page
+            // Insert new page with user_id
             const { error: insertError } = await supabase
                 .from('connected_pages')
                 .insert({
+                    user_id: userId,
                     page_id: pageId,
                     page_name: pageName,
                     page_access_token: pageAccessToken,
@@ -98,7 +117,8 @@ export async function POST(req: Request) {
             await supabase
                 .from('connected_pages')
                 .update({ webhook_subscribed: true })
-                .eq('page_id', pageId);
+                .eq('page_id', pageId)
+                .eq('user_id', userId);
         } else {
             console.warn('Webhook subscription failed:', subscribeResult.error);
             // Page is connected but webhook subscription failed - not a fatal error
@@ -121,6 +141,13 @@ export async function POST(req: Request) {
 // DELETE - Disconnect a page
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const pageId = searchParams.get('pageId');
 
@@ -133,6 +160,7 @@ export async function DELETE(req: Request) {
             .from('connected_pages')
             .select('page_access_token, webhook_subscribed')
             .eq('page_id', pageId)
+            .eq('user_id', userId)
             .single();
 
         if (fetchError || !page) {
@@ -151,7 +179,8 @@ export async function DELETE(req: Request) {
         const { error: deleteError } = await supabase
             .from('connected_pages')
             .delete()
-            .eq('page_id', pageId);
+            .eq('page_id', pageId)
+            .eq('user_id', userId);
 
         if (deleteError) {
             console.error('Error deleting page:', deleteError);

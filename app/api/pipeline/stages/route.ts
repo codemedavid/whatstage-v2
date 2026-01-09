@@ -1,12 +1,21 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - Fetch all pipeline stages
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data: stages, error } = await supabase
             .from('pipeline_stages')
             .select('*')
+            .eq('user_id', userId)
             .order('display_order', { ascending: true });
 
         if (error) {
@@ -24,16 +33,24 @@ export async function GET() {
 // POST - Create a new pipeline stage
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { name, color, description } = await req.json();
 
         if (!name) {
             return NextResponse.json({ error: 'Stage name is required' }, { status: 400 });
         }
 
-        // Get the highest display_order
+        // Get the highest display_order for this user
         const { data: lastStage } = await supabase
             .from('pipeline_stages')
             .select('display_order')
+            .eq('user_id', userId)
             .order('display_order', { ascending: false })
             .limit(1)
             .single();
@@ -43,6 +60,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('pipeline_stages')
             .insert({
+                user_id: userId,
                 name,
                 display_order: newOrder,
                 color: color || '#64748b',
@@ -66,13 +84,20 @@ export async function POST(req: Request) {
 // PATCH - Update a pipeline stage
 export async function PATCH(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { id, name, color, description, display_order } = await req.json();
 
         if (!id) {
             return NextResponse.json({ error: 'Stage ID is required' }, { status: 400 });
         }
 
-        const updates: Record<string, any> = {};
+        const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
         if (color !== undefined) updates.color = color;
         if (description !== undefined) updates.description = description;
@@ -82,6 +107,7 @@ export async function PATCH(req: Request) {
             .from('pipeline_stages')
             .update(updates)
             .eq('id', id)
+            .eq('user_id', userId)
             .select()
             .single();
 
@@ -100,6 +126,13 @@ export async function PATCH(req: Request) {
 // DELETE - Delete a pipeline stage
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -111,7 +144,8 @@ export async function DELETE(req: Request) {
         const { count } = await supabase
             .from('leads')
             .select('*', { count: 'exact', head: true })
-            .eq('current_stage_id', id);
+            .eq('current_stage_id', id)
+            .eq('user_id', userId);
 
         if (count && count > 0) {
             return NextResponse.json({
@@ -122,7 +156,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('pipeline_stages')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting stage:', error);

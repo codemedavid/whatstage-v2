@@ -6,7 +6,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:bot": "npx tsx scripts/test-bot.ts",
+    "fix:bot-data": "npx tsx scripts/fix-bot-data.ts",
+    "fix:embeddings": "npx tsx scripts/reembed-documents.ts",
+    "test:user": "npx tsx scripts/test-user.ts",
+    "test:chat": "npx tsx scripts/test-chat.ts"
   },
   "dependencies": {
     "@hello-pangea/dnd": "^18.0.1",
@@ -33,6 +38,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.2.3",
     "eslint": "^9",
     "eslint-config-next": "16.0.7",
     "tailwindcss": "^4",

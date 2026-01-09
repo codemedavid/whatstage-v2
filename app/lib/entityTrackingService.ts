@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { supabase } from './supabase';
+import { supabaseAdmin } from './supabaseAdmin';
 
 // Entity types we track
 export type EntityType = 'name' | 'preference' | 'budget' | 'interest' | 'contact' | 'custom';
@@ -109,6 +109,7 @@ Return ONLY the JSON array, no other text.`;
 
 /**
  * Upsert an entity (insert or update if exists)
+ * Uses supabaseAdmin to bypass RLS since this is called from webhook context
  */
 export async function upsertEntity(
     senderId: string,
@@ -116,10 +117,11 @@ export async function upsertEntity(
     entityKey: string,
     entityValue: string,
     confidence: number = 1.0,
-    source: string = 'ai_extraction'
+    source: string = 'ai_extraction',
+    userId?: string | null
 ): Promise<void> {
     try {
-        const { error } = await supabase
+        const { error } = await supabaseAdmin
             .from('lead_entities')
             .upsert({
                 sender_id: senderId,
@@ -128,7 +130,8 @@ export async function upsertEntity(
                 entity_value: entityValue,
                 confidence,
                 source,
-                updated_at: new Date().toISOString()
+                updated_at: new Date().toISOString(),
+                ...(userId && { user_id: userId })
             }, {
                 onConflict: 'sender_id,entity_type,entity_key'
             });
@@ -143,15 +146,23 @@ export async function upsertEntity(
 
 /**
  * Get all entities for a sender
+ * Uses supabaseAdmin to bypass RLS, filters by user_id when provided
  */
-export async function getLeadEntities(senderId: string): Promise<LeadEntity[]> {
+export async function getLeadEntities(senderId: string, userId?: string | null): Promise<LeadEntity[]> {
     try {
-        const { data, error } = await supabase
+        let query = supabaseAdmin
             .from('lead_entities')
             .select('*')
             .eq('sender_id', senderId)
             .order('entity_type', { ascending: true })
             .order('updated_at', { ascending: false });
+
+        // Filter by user_id for multi-tenancy isolation when provided
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query;
 
         if (error) {
             console.error('[EntityTracking] Error fetching entities:', error);
@@ -228,13 +239,20 @@ IMPORTANT: Use this profile to personalize responses. Address the customer by na
 
 /**
  * Delete all entities for a sender (for testing/cleanup)
+ * Uses supabaseAdmin to bypass RLS
  */
-export async function deleteLeadEntities(senderId: string): Promise<void> {
+export async function deleteLeadEntities(senderId: string, userId?: string | null): Promise<void> {
     try {
-        const { error } = await supabase
+        let query = supabaseAdmin
             .from('lead_entities')
             .delete()
             .eq('sender_id', senderId);
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { error } = await query;
 
         if (error) {
             console.error('[EntityTracking] Error deleting entities:', error);

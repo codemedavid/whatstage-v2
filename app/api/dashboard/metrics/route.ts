@@ -1,12 +1,21 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         // 1. Get Store Settings
         const { data: storeSettings } = await supabase
             .from('store_settings')
             .select('store_name, store_type, setup_completed')
+            .eq('user_id', userId)
             .single();
 
         const store = {
@@ -19,6 +28,7 @@ export async function GET() {
         const { data: botSettings } = await supabase
             .from('bot_settings')
             .select('primary_goal')
+            .eq('user_id', userId)
             .single();
 
         const goalType = (botSettings?.primary_goal || 'lead_generation') as
@@ -27,13 +37,15 @@ export async function GET() {
         // 2b. Get valid stages to filter phantom leads
         const { data: validStages } = await supabase
             .from('pipeline_stages')
-            .select('id');
+            .select('id')
+            .eq('user_id', userId);
         const validStageIds = validStages?.map(s => s.id) || [];
 
         // 3. Get total leads count
         const { count: totalLeads } = await supabase
             .from('leads')
             .select('*', { count: 'exact', head: true })
+            .eq('user_id', userId)
             .in('current_stage_id', validStageIds);
 
         // 4. Calculate goal reached based on goal type
@@ -44,6 +56,7 @@ export async function GET() {
             const { count } = await supabase
                 .from('leads')
                 .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
                 .or('phone.not.is.null,email.not.is.null')
                 .in('current_stage_id', validStageIds);
             reachedCount = count || 0;
@@ -52,6 +65,7 @@ export async function GET() {
             const { count } = await supabase
                 .from('appointments')
                 .select('sender_psid', { count: 'exact', head: true })
+                .eq('user_id', userId)
                 .in('status', ['confirmed', 'pending']);
             reachedCount = count || 0;
         } else if (goalType === 'purchase') {
@@ -59,6 +73,7 @@ export async function GET() {
             const { count } = await supabase
                 .from('orders')
                 .select('lead_id', { count: 'exact', head: true })
+                .eq('user_id', userId)
                 .in('status', ['confirmed', 'processing', 'shipped', 'delivered']);
             reachedCount = count || 0;
         } else if (goalType === 'tripping') {
@@ -66,6 +81,7 @@ export async function GET() {
             const { data: stages } = await supabase
                 .from('pipeline_stages')
                 .select('id, display_order')
+                .eq('user_id', userId)
                 .gte('display_order', 2); // Qualified is display_order 2
 
             if (stages && stages.length > 0) {
@@ -73,6 +89,7 @@ export async function GET() {
                 const { count } = await supabase
                     .from('leads')
                     .select('*', { count: 'exact', head: true })
+                    .eq('user_id', userId)
                     .in('current_stage_id', stageIds);
                 reachedCount = count || 0;
             }
@@ -86,6 +103,7 @@ export async function GET() {
         const { data: positiveStages } = await supabase
             .from('pipeline_stages')
             .select('id, name')
+            .eq('user_id', userId)
             .in('name', ['Qualified', 'Negotiating', 'Won', 'Appointment Booked', 'Appointment Scheduled']);
 
         const positiveStageIds = positiveStages?.map(s => s.id) || [];
@@ -98,6 +116,7 @@ export async function GET() {
             const { count: currentCount } = await supabase
                 .from('leads')
                 .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
                 .in('current_stage_id', positiveStageIds);
             qualifiedCount = currentCount || 0;
 
@@ -108,6 +127,7 @@ export async function GET() {
             const { count: prevCount } = await supabase
                 .from('lead_stage_history')
                 .select('*', { count: 'exact', head: true })
+                .eq('user_id', userId)
                 .in('to_stage_id', positiveStageIds)
                 .lt('created_at', sevenDaysAgo.toISOString());
             previousQualifiedCount = prevCount || 0;

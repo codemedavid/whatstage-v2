@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import { searchAllSources, MediaMatch } from './rag';
 import { supabase } from './supabase';
+import { supabaseAdmin } from './supabaseAdmin';
 import { getRecentActivities, buildActivityContextForAI, LeadActivity, findRecentActivityByType } from './activityTrackingService';
 import { getCatalogContext } from './productRagService';
 import { getCurrentCart, buildCartContextForAI } from './cartContextService';
@@ -15,6 +16,9 @@ import { getAvailableApiKey, markKeyRateLimited } from './apiKeyRotationService'
 import { canProceed, recordSuccess, recordFailure, getCircuitState, CircuitState } from './circuitBreakerService';
 import { trackRequest, shouldThrottle } from './rateLimitService';
 import { getSmartFallbackMessage, getBusyFallbackMessage } from './fallbackMessageService';
+import { incrementMessageCountForSender } from './pipelineService';
+// User-aware bot configuration for multi-user support
+import { getBotSettingsForUser, getBotRulesForUser, getBotInstructionsForUser, getPaymentMethodsForUser } from './userBotConfigService';
 
 const MAX_HISTORY = 10; // Reduced to prevent context overload
 
@@ -24,8 +28,12 @@ let cachedSettings: any = null;
 let settingsLastRead = 0;
 const SETTINGS_CACHE_MS = 60000; // 1 minute cache
 
-// Fetch bot settings from database with caching
+/**
+ * @deprecated Use getBotSettingsForUser(userId) for multi-tenant safety.
+ * This function returns the first user's settings without filtering!
+ */
 async function getBotSettings() {
+    console.warn('[DEPRECATION] getBotSettings() called without userId - use getBotSettingsForUser() for multi-tenant safety');
     const now = Date.now();
     if (cachedSettings && now - settingsLastRead < SETTINGS_CACHE_MS) {
         return cachedSettings;
@@ -58,13 +66,14 @@ let currentKeyId: string | null = null;
 
 /**
  * Get or create OpenAI client with API key rotation
+ * Uses 3-tier fallback: user key -> rotation pool -> .env
  */
-async function getAIClient(): Promise<{ client: OpenAI; keyId: string | null }> {
-    const { apiKey, keyId } = await getAvailableApiKey('nvidia');
+async function getAIClient(userId?: string | null): Promise<{ client: OpenAI; keyId: string | null; keyType: 'user' | 'rotation' | 'env' }> {
+    const { apiKey, keyId, keyType } = await getAvailableApiKey('nvidia', userId);
 
     // Reuse client if same key
     if (currentClient && currentKeyId === keyId) {
-        return { client: currentClient, keyId };
+        return { client: currentClient, keyId, keyType };
     }
 
     currentClient = new OpenAI({
@@ -73,7 +82,7 @@ async function getAIClient(): Promise<{ client: OpenAI; keyId: string | null }> 
     });
     currentKeyId = keyId;
 
-    return { client: currentClient, keyId };
+    return { client: currentClient, keyId, keyType };
 }
 
 // Legacy client for backward compatibility (uses env key)
@@ -82,8 +91,12 @@ const client = new OpenAI({
     apiKey: process.env.NVIDIA_API_KEY,
 });
 
-// Fetch bot rules from database
+/**
+ * @deprecated Use getBotRulesForUser(userId) for multi-tenant safety.
+ * This function returns rules without user filtering!
+ */
 async function getBotRules(): Promise<string[]> {
+    console.warn('[DEPRECATION] getBotRules() called without userId - use getBotRulesForUser() for multi-tenant safety');
     try {
         const { data: rules, error } = await supabase
             .from('bot_rules')
@@ -104,8 +117,12 @@ async function getBotRules(): Promise<string[]> {
     }
 }
 
-// Fetch bot instructions from database
+/**
+ * @deprecated Use getBotInstructionsForUser(userId) for multi-tenant safety.
+ * This function returns instructions without user filtering!
+ */
 async function getBotInstructions(): Promise<string> {
+    console.warn('[DEPRECATION] getBotInstructions() called without userId - use getBotInstructionsForUser() for multi-tenant safety');
     try {
         const { data, error } = await supabase
             .from('bot_instructions')
@@ -134,13 +151,21 @@ interface LeadGoalStatus {
     has_phone: boolean;
 }
 
-async function getLeadGoalStatus(senderId: string): Promise<LeadGoalStatus> {
+// Now accepts userId for proper multi-tenancy isolation
+async function getLeadGoalStatus(senderId: string, userId?: string | null): Promise<LeadGoalStatus> {
     try {
-        const { data, error } = await supabase
+        // Use supabaseAdmin to bypass RLS since called from webhook context
+        let query = supabaseAdmin
             .from('leads')
             .select('goal_met_at, name, email, phone')
-            .eq('sender_id', senderId)
-            .single();
+            .eq('sender_id', senderId);
+
+        // Filter by user_id for multi-tenancy isolation when provided
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query.single();
 
         if (error || !data) {
             return { goal_met_at: null, has_name: false, has_email: false, has_phone: false };
@@ -357,15 +382,23 @@ async function getPaymentMethods(): Promise<string> {
 
 // Fetch conversation history for a sender using hybrid selection
 // Gets 5 most recent + up to 5 high-importance messages from last 50
-export async function getConversationHistory(senderId: string): Promise<{ role: string; content: string }[]> {
+export async function getConversationHistory(senderId: string, userId?: string | null): Promise<{ role: string; content: string }[]> {
     try {
         // Get the last 50 messages to select from
-        const { data: allMessages, error } = await supabase
+        // Use supabaseAdmin to bypass RLS since this is called from webhook context
+        let query = supabaseAdmin
             .from('conversations')
             .select('id, role, content, importance_score, created_at')
             .eq('sender_id', senderId)
             .order('created_at', { ascending: false })
             .limit(50);
+
+        // Filter by user_id for multi-tenancy isolation when provided
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data: allMessages, error } = await query;
 
         if (error) {
             console.error('Error fetching conversation history:', error);
@@ -400,36 +433,45 @@ export async function getConversationHistory(senderId: string): Promise<{ role: 
 }
 
 // Store a message with importance score (fire and forget - don't await)
-function storeMessageAsync(senderId: string, role: 'user' | 'assistant', content: string) {
+// Uses supabaseAdmin to bypass RLS since webhooks don't have user auth context
+function storeMessageAsync(senderId: string, role: 'user' | 'assistant', content: string, userId?: string | null) {
     // Run in background - don't block the response
     (async () => {
         try {
             // Calculate importance score based on content
             const importance_score = calculateImportance(content, role);
 
-            // Insert message with importance score
-            const { error: insertError } = await supabase
+            // Insert message with importance score (include user_id for multi-tenancy)
+            const { error: insertError } = await supabaseAdmin
                 .from('conversations')
                 .insert({
                     sender_id: senderId,
                     role,
                     content,
                     importance_score,
+                    user_id: userId || null,
                 });
+
+            // Increment message count for lead card display (fire and forget)
+            if (role === 'user') {
+                incrementMessageCountForSender(senderId, userId).catch(err =>
+                    console.error('Error incrementing message count:', err)
+                );
+            }
 
             if (insertError) {
                 console.error('Error storing message:', insertError);
             }
 
             // Cleanup old LOW-importance messages only (preserve high-importance)
-            const { count } = await supabase
+            const { count } = await supabaseAdmin
                 .from('conversations')
                 .select('*', { count: 'exact', head: true })
                 .eq('sender_id', senderId);
 
             if (count && count > MAX_HISTORY + 20) {
                 // Delete oldest LOW-importance ones to get back to reasonable size
-                const { data: oldMessages } = await supabase
+                const { data: oldMessages } = await supabaseAdmin
                     .from('conversations')
                     .select('id')
                     .eq('sender_id', senderId)
@@ -438,7 +480,7 @@ function storeMessageAsync(senderId: string, role: 'user' | 'assistant', content
                     .limit(count - MAX_HISTORY - 10); // Keep some buffer
 
                 if (oldMessages && oldMessages.length > 0) {
-                    await supabase
+                    await supabaseAdmin
                         .from('conversations')
                         .delete()
                         .in('id', oldMessages.map(m => m.id));
@@ -451,15 +493,23 @@ function storeMessageAsync(senderId: string, role: 'user' | 'assistant', content
 }
 
 // Fetch the latest conversation summary for a sender
-export async function getLatestConversationSummary(senderId: string): Promise<string> {
+// Now filters by user_id for proper multi-tenancy isolation
+export async function getLatestConversationSummary(senderId: string, userId?: string | null): Promise<string> {
     try {
-        const { data, error } = await supabase
+        // Use supabaseAdmin to bypass RLS since this is called from webhook context
+        let query = supabaseAdmin
             .from('conversation_summaries')
             .select('summary')
             .eq('sender_id', senderId)
             .order('created_at', { ascending: false })
-            .limit(1)
-            .single();
+            .limit(1);
+
+        // Filter by user_id for multi-tenancy isolation when provided
+        if (userId) {
+            query = query.eq('user_id', userId);
+        }
+
+        const { data, error } = await query.single();
 
         if (error) {
             return '';
@@ -473,16 +523,25 @@ export async function getLatestConversationSummary(senderId: string): Promise<st
 }
 
 // Generate a new conversation summary (to be called periodically)
-export async function generateConversationSummary(senderId: string, leadId?: string): Promise<string | void> {
-    console.log(`Generating conversation summary for ${senderId}...`);
+// Now accepts userId for proper multi-tenancy isolation
+export async function generateConversationSummary(senderId: string, userId?: string | null, leadId?: string): Promise<string | void> {
+    console.log(`Generating conversation summary for ${senderId}... userId: ${userId || 'none'}`);
     try {
         // 1. Get last 20 messages
-        const { data: messages } = await supabase
+        // Use supabaseAdmin to bypass RLS since this is called from webhook context
+        let messagesQuery = supabaseAdmin
             .from('conversations')
             .select('role, content')
             .eq('sender_id', senderId)
             .order('created_at', { ascending: false }) // Get newest first
             .limit(20);
+
+        // Filter by user_id for multi-tenancy isolation when provided
+        if (userId) {
+            messagesQuery = messagesQuery.eq('user_id', userId);
+        }
+
+        const { data: messages } = await messagesQuery;
 
         if (!messages || messages.length === 0) return;
 
@@ -493,8 +552,8 @@ export async function generateConversationSummary(senderId: string, leadId?: str
         const recentActivities = await getRecentActivities(senderId, 10);
         const activityContext = buildActivityContextForAI(recentActivities);
 
-        // 3. Get previous summary
-        const previousSummary = await getLatestConversationSummary(senderId);
+        // 3. Get previous summary (user-filtered)
+        const previousSummary = await getLatestConversationSummary(senderId, userId);
 
         // Fetch settings for model
         const settings = await getBotSettings();
@@ -535,11 +594,13 @@ Return ONLY the summary text. Do not add "Here is the summary" or other filler.`
         console.log('Generated summary:', newSummary);
 
         if (newSummary) {
-            // 5. Save new summary
-            const { error: insertError } = await supabase
+            // 5. Save new summary with user_id for multi-tenancy
+            // Use supabaseAdmin to bypass RLS since this is called from webhook context
+            const { error: insertError } = await supabaseAdmin
                 .from('conversation_summaries')
                 .insert({
                     sender_id: senderId,
+                    user_id: userId || null,
                     summary: newSummary,
                     meta: {
                         messages_analyzed: messages.length,
@@ -582,39 +643,46 @@ export interface ImageContext {
 export async function getBotResponse(
     userMessage: string,
     senderId: string = 'web_default',
-    imageContext?: ImageContext
+    imageContext?: ImageContext,
+    userId?: string | null
 ): Promise<string> {
     const startTime = Date.now();
 
     // Read bot configuration from database (cached)
-    const settings = await getBotSettings();
+    // Use user-specific config if userId is provided (webhook context)
+    const settings = userId
+        ? await getBotSettingsForUser(userId)
+        : await getBotSettings();
     const botName = settings.bot_name || 'Assistant';
     const botTone = settings.bot_tone || 'helpful and professional';
 
     // Store user message immediately (fire and forget)
-    storeMessageAsync(senderId, 'user', userMessage);
+    storeMessageAsync(senderId, 'user', userMessage, userId);
 
     // Check if this is a payment-related query
     const isPaymentRelated = isPaymentQuery(userMessage);
     let paymentMethodsContext = '';
     if (isPaymentRelated) {
-        paymentMethodsContext = await getPaymentMethods();
+        paymentMethodsContext = userId
+            ? await getPaymentMethodsForUser(userId)
+            : await getPaymentMethods();
     }
 
     // Run independent operations in PARALLEL
     // Using unified search for documents + media (single embedding, single query)
+    // Use user-aware functions when userId is provided (webhook context)
     const results = await Promise.all([
-        getBotRules(),
-        getConversationHistory(senderId),
-        searchAllSources(userMessage, { includeMedia: true }), // Unified search for docs + media
-        getBotInstructions(),
+        userId ? getBotRulesForUser(userId) : getBotRules(),
+        getConversationHistory(senderId, userId),
+        searchAllSources(userMessage, { includeMedia: true, userId: userId || undefined }), // Unified search for docs + media (user-filtered)
+        userId ? getBotInstructionsForUser(userId) : getBotInstructions(),
         getRecentActivities(senderId, 5), // Get last 5 activities for context
-        getCatalogContext(), // Get products, properties, payment methods
-        getLatestConversationSummary(senderId), // Get long-term context summary
+        getCatalogContext(userId || undefined), // Get products, properties, payment methods (user-filtered)
+        getLatestConversationSummary(senderId, userId), // Get long-term context summary (user-filtered)
         getCurrentCart(senderId), // Get current cart status
         getLeadEntities(senderId), // Get structured customer facts
         getSmartPassiveState(senderId), // Get Smart Passive mode state
-        getLeadGoalStatus(senderId), // Get goal completion status
+        getLeadGoalStatus(senderId, userId), // Get goal completion status (user-filtered)
     ]);
 
     // Destructure promise results
@@ -1056,7 +1124,8 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
         }
 
         // === GET AI CLIENT WITH KEY ROTATION ===
-        const { client: aiClient, keyId } = await getAIClient();
+        // Uses 3-tier fallback: user key -> rotation pool -> .env
+        const { client: aiClient, keyId, keyType } = await getAIClient(userId);
 
         // Use selected model or default to Qwen
         const aiModel = settings.ai_model || "qwen/qwen3-235b-a22b";
@@ -1082,7 +1151,7 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
 
         responseContent = await withRetry(async () => {
             // Get fresh client (may rotate key on retry)
-            const { client: retryClient, keyId: retryKeyId } = await getAIClient();
+            const { client: retryClient, keyId: retryKeyId } = await getAIClient(userId);
             lastKeyId = retryKeyId;
 
             const stream = await retryClient.chat.completions.create(completionOptions as OpenAI.Chat.ChatCompletionCreateParams) as AsyncIterable<OpenAI.Chat.ChatCompletionChunk>;
@@ -1150,7 +1219,7 @@ INSTRUCTION: Respond naturally about the image. If they might be trying to send 
         }
 
         // Store bot response (fire and forget)
-        storeMessageAsync(senderId, 'assistant', responseContent);
+        storeMessageAsync(senderId, 'assistant', responseContent, userId);
 
         // Extract entities from this exchange (fire and forget - don't block response)
         extractEntitiesFromMessage(senderId, userMessage, responseContent).catch(err => {

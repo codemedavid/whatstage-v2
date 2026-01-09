@@ -1,11 +1,12 @@
 import { Metadata } from 'next';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin } from '@/app/lib/supabaseAdmin';
 import PropertyDetailClient from './PropertyDetailClient';
 import { Building } from 'lucide-react';
 import Link from 'next/link';
 
 interface Property {
     id: string;
+    user_id: string;
     title: string;
     description: string | null;
     price: number | null;
@@ -26,12 +27,13 @@ interface Property {
     payment_terms: string | null;
 }
 
-// Fetch property data
+// Fetch property data (public access allowed for active properties)
 async function getProperty(id: string): Promise<Property | null> {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
         .from('properties')
         .select('*')
         .eq('id', id)
+        .eq('is_active', true)
         .single();
 
     if (error || !data) {
@@ -41,12 +43,13 @@ async function getProperty(id: string): Promise<Property | null> {
     return data as Property;
 }
 
-// Fetch related properties
-async function getRelatedProperties(propertyId: string): Promise<Property[]> {
-    const { data, error } = await supabase
+// Fetch related properties from the same owner
+async function getRelatedProperties(propertyId: string, userId: string): Promise<Property[]> {
+    const { data, error } = await supabaseAdmin
         .from('properties')
         .select('*')
         .neq('id', propertyId)
+        .eq('user_id', userId)
         .eq('is_active', true)
         .limit(3);
 
@@ -57,11 +60,12 @@ async function getRelatedProperties(propertyId: string): Promise<Property[]> {
     return data as Property[];
 }
 
-// Fetch connected Facebook page
-async function getFacebookPageId(): Promise<string | null> {
-    const { data, error } = await supabase
+// Fetch connected Facebook page for the property owner
+async function getFacebookPageId(userId: string): Promise<string | null> {
+    const { data, error } = await supabaseAdmin
         .from('connected_pages')
         .select('page_id')
+        .eq('user_id', userId)
         .eq('is_active', true)
         .limit(1)
         .single();
@@ -106,11 +110,8 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
 export default async function PropertyDetailPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
 
-    // Fetch all data in parallel for better performance
-    const [property, facebookPageId] = await Promise.all([
-        getProperty(id),
-        getFacebookPageId(),
-    ]);
+    // Fetch property first
+    const property = await getProperty(id);
 
     if (!property) {
         return (
@@ -124,8 +125,11 @@ export default async function PropertyDetailPage({ params }: { params: Promise<{
         );
     }
 
-    // Fetch related properties after confirming property exists
-    const relatedProperties = await getRelatedProperties(property.id);
+    // Fetch related properties and Facebook page for the property owner in parallel
+    const [relatedProperties, facebookPageId] = await Promise.all([
+        getRelatedProperties(property.id, property.user_id),
+        getFacebookPageId(property.user_id),
+    ]);
 
     return (
         <PropertyDetailClient
@@ -135,3 +139,4 @@ export default async function PropertyDetailPage({ params }: { params: Promise<{
         />
     );
 }
+

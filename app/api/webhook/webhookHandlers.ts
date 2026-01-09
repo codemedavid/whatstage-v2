@@ -1,17 +1,20 @@
 import { NextResponse } from 'next/server';
 import { waitUntil } from '@vercel/functions';
 import { startOrRefreshTakeover } from '@/app/lib/humanTakeoverService';
-import { getSettings } from './config';
+import { getSettings, getPageTokenAndUser } from './config';
 import { handleImageMessage, handleMessage, handlePostback, handleReferral } from './messageHandlers';
+import { checkAndMarkProcessed } from '@/app/lib/webhookDeduplication';
 
-// Track processed message IDs to prevent duplicates (Facebook retries webhooks)
-const processedMessages = new Set<string>();
-const MAX_PROCESSED_CACHE = 1000;
+// In-memory cache as fast first-pass filter (reduces DB calls for immediate retries)
+// The distributed Supabase deduplication handles cross-instance cases
+const recentMessages = new Set<string>();
+const MAX_RECENT_CACHE = 500;
 
-function cleanupProcessedMessages() {
-    if (processedMessages.size > MAX_PROCESSED_CACHE) {
-        const toDelete = Array.from(processedMessages).slice(0, processedMessages.size - MAX_PROCESSED_CACHE);
-        toDelete.forEach(id => processedMessages.delete(id));
+function addToRecentCache(messageId: string) {
+    recentMessages.add(messageId);
+    if (recentMessages.size > MAX_RECENT_CACHE) {
+        const first = recentMessages.values().next().value;
+        if (first) recentMessages.delete(first);
     }
 }
 
@@ -51,13 +54,25 @@ export async function handlePostWebhook(req: Request) {
 
 
                 const sender_psid = webhook_event.sender?.id;
-                const recipient_psid = webhook_event.recipient?.id;
+                const recipient_psid = webhook_event.recipient?.id; // This is the page ID
+
+                // Get the user ID that owns this page - CRITICAL for multi-user
+                let userId: string | null = null;
+                if (recipient_psid) {
+                    const pageInfo = await getPageTokenAndUser(recipient_psid);
+                    userId = pageInfo.userId;
+                    if (userId) {
+                        console.log(`[Webhook] Page ${recipient_psid} owned by user ${userId}`);
+                    } else {
+                        console.warn(`[Webhook] No user found for page ${recipient_psid}`);
+                    }
+                }
 
                 // Handle Referral (m.me links with ref param)
                 if (webhook_event.referral) {
                     console.log('Referral event received:', webhook_event.referral);
                     waitUntil(
-                        handleReferral(sender_psid, webhook_event.referral, recipient_psid).catch(err => {
+                        handleReferral(sender_psid, webhook_event.referral, recipient_psid, userId).catch(err => {
                             console.error('Error handling referral:', err);
                         })
                     );
@@ -66,7 +81,7 @@ export async function handlePostWebhook(req: Request) {
 
                 if (webhook_event.postback) {
                     console.log('Postback event received:', webhook_event.postback);
-                    const handled = await handlePostback(webhook_event.postback, sender_psid, recipient_psid, waitUntil);
+                    const handled = await handlePostback(webhook_event.postback, sender_psid, recipient_psid, userId, waitUntil);
                     if (handled) {
                         continue;
                     }
@@ -74,19 +89,27 @@ export async function handlePostWebhook(req: Request) {
 
                 const messageId = webhook_event.message?.mid;
 
-                // Skip if already processed (prevents duplicate responses)
-                if (messageId && processedMessages.has(messageId)) {
-                    console.log('Skipping duplicate message:', messageId);
-                    continue;
-                }
-
-                // Mark as processed
+                // Distributed deduplication: first check in-memory cache (fast), then distributed DB
                 if (messageId) {
-                    processedMessages.add(messageId);
-                    cleanupProcessedMessages();
+                    // Fast first-pass: check in-memory cache for immediate retries
+                    if (recentMessages.has(messageId)) {
+                        console.log('Skipping duplicate message (cache hit):', messageId);
+                        continue;
+                    }
+
+                    // Distributed check-and-mark: atomically claim this message
+                    // Returns true if already processed by another instance
+                    const alreadyProcessed = await checkAndMarkProcessed(messageId);
+                    if (alreadyProcessed) {
+                        console.log('Skipping duplicate message (distributed):', messageId);
+                        continue;
+                    }
+
+                    // Add to local cache for fast filtering of immediate retries
+                    addToRecentCache(messageId);
                 }
 
-                console.log('Processing message from:', sender_psid, 'to:', recipient_psid, 'mid:', messageId);
+                console.log('Processing message from:', sender_psid, 'to:', recipient_psid, 'mid:', messageId, 'userId:', userId);
 
                 // Check if this is a message echo (page/human agent sent a message)
                 const isEchoMessage = webhook_event.message?.is_echo === true;
@@ -119,6 +142,7 @@ export async function handlePostWebhook(req: Request) {
                                         sender_psid,
                                         attachment.payload.url,
                                         recipient_psid,
+                                        userId,
                                         messageText // Pass accompanying text
                                     ).catch(err => {
                                         console.error('Error handling image message:', err);
@@ -133,7 +157,7 @@ export async function handlePostWebhook(req: Request) {
                     if (messageText && !hasImageAttachment) {
                         console.log('Message text:', messageText);
                         waitUntil(
-                            handleMessage(sender_psid, messageText, recipient_psid).catch(err => {
+                            handleMessage(sender_psid, messageText, recipient_psid, userId).catch(err => {
                                 console.error('Error handling message:', err);
                             })
                         );

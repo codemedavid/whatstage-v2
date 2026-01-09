@@ -18,15 +18,24 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'Missing form_id or data' }, { status: 400 });
         }
 
-        // 1. Fetch Form configuration to know mapping
+        // 1. Fetch Form configuration to know mapping AND get user_id for multi-tenancy
         const { data: form, error: formError } = await supabase
             .from('forms')
-            .select('*')
+            .select('*, user_id')
             .eq('id', form_id)
             .single();
 
         if (formError || !form) {
             return NextResponse.json({ error: 'Form not found' }, { status: 404 });
+        }
+
+        // Extract user_id from form for proper multi-tenant data isolation
+        const formUserId = form.user_id;
+
+        // Validate formUserId to enforce tenant isolation
+        if (!formUserId || (typeof formUserId === 'string' && formUserId.trim() === '')) {
+            console.error(`[FormSubmit] Invalid form.user_id for form ${form_id}: user_id is ${formUserId === '' ? 'empty string' : formUserId}`);
+            return NextResponse.json({ error: 'Form configuration error: missing owner' }, { status: 400 });
         }
 
         const { data: fields, error: fieldsError } = await supabase
@@ -78,11 +87,13 @@ export async function POST(request: Request) {
 
         // First priority: Check for existing Facebook lead by sender_id (PSID)
         // This ensures Messenger users are linked to their existing lead
-        if (user_id) {
+        // Filter by user_id for proper multi-tenancy
+        if (user_id && formUserId) {
             const { data: fbLead } = await supabase
                 .from('leads')
                 .select('id')
                 .eq('sender_id', user_id)
+                .eq('user_id', formUserId)
                 .single();
             if (fbLead) {
                 leadId = fbLead.id;
@@ -90,23 +101,25 @@ export async function POST(request: Request) {
             }
         }
 
-        // Fallback: Try to find by email
-        if (!leadId && email) {
+        // Fallback: Try to find by email (within same user's leads)
+        if (!leadId && email && formUserId) {
             const { data: existingLead } = await supabase
                 .from('leads')
                 .select('id')
                 .eq('email', email)
+                .eq('user_id', formUserId)
                 .limit(1)
                 .single();
             if (existingLead) leadId = existingLead.id;
         }
 
-        // Fallback: Try to find by phone
-        if (!leadId && phone) {
+        // Fallback: Try to find by phone (within same user's leads)
+        if (!leadId && phone && formUserId) {
             const { data: existingLead } = await supabase
                 .from('leads')
                 .select('id')
                 .eq('phone', phone)
+                .eq('user_id', formUserId)
                 .limit(1)
                 .single();
             if (existingLead) leadId = existingLead.id;
@@ -141,7 +154,7 @@ export async function POST(request: Request) {
                 .update(updates)
                 .eq('id', leadId);
         } else {
-            // Create New Lead
+            // Create New Lead with user_id for proper multi-tenant isolation
             // Generate pseudo sender_id
             const newSenderId = `web_form_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -152,7 +165,8 @@ export async function POST(request: Request) {
                 phone,
                 current_stage_id: form.pipeline_stage_id, // Default to form's stage
                 custom_data: customData,
-                message_count: 0
+                message_count: 0,
+                user_id: formUserId, // CRITICAL: Associate lead with form owner
             };
 
             const { data: createdLead, error: createError } = await supabase
@@ -169,12 +183,13 @@ export async function POST(request: Request) {
             leadId = createdLead.id;
         }
 
-        // 4. Record Submission
+        // 4. Record Submission with user_id for proper data isolation
         const { data: submission, error: matchError } = await supabase
             .from('form_submissions')
             .insert([{
                 form_id: form_id,
                 lead_id: leadId,
+                user_id: formUserId, // Associate submission with form owner
                 submitted_data: {
                     ...submissionData,
                     ...(user_id ? { _messenger_user_id: user_id } : {})
@@ -194,7 +209,7 @@ export async function POST(request: Request) {
                 // Fetch digital product details for price and notification settings
                 const { data: digitalProduct } = await supabase
                     .from('digital_products')
-                    .select('title, price, access_duration_days, notification_title, notification_greeting, notification_button_text, notification_button_url')
+                    .select('title, price, access_duration_days, user_id, notification_title, notification_greeting, notification_button_text, notification_button_url')
                     .eq('id', digital_product_id)
                     .single();
 
@@ -208,6 +223,7 @@ export async function POST(request: Request) {
                 await supabase
                     .from('digital_product_purchases')
                     .insert([{
+                        user_id: digitalProduct?.user_id,
                         digital_product_id: digital_product_id,
                         lead_id: leadId,
                         form_submission_id: submission.id,
@@ -227,7 +243,8 @@ export async function POST(request: Request) {
                                     purchaseRecord.id,
                                     user_id || null,
                                     digital_product_id,
-                                    leadId
+                                    leadId,
+                                    digitalProduct?.user_id
                                 );
                             } catch (workflowError) {
                                 console.error('[FormSubmit] Error triggering digital product workflows:', workflowError);

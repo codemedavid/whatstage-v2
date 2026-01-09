@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { supabaseAdmin } from './supabaseAdmin';
 import { sendMessengerMessage } from './messengerService';
 import { getBotResponse, getLatestConversationSummary } from './chatService';
 
@@ -112,6 +113,66 @@ export async function calculateOptimalFollowUpTime(
 }
 
 /**
+ * Calculate the optimal follow-up time for a specific user (multi-tenant safe)
+ * Filters response patterns by user_id to ensure data isolation
+ */
+export async function calculateOptimalFollowUpTimeForUser(
+    senderId: string,
+    attemptCount: number,
+    userId: string
+): Promise<Date> {
+    const settings = await getFollowUpSettingsForUser(userId);
+    const now = new Date();
+
+    // Start with base interval
+    const baseIntervals = settings.base_intervals;
+    const intervalIndex = Math.min(attemptCount, baseIntervals.length - 1);
+    let intervalMinutes = baseIntervals[intervalIndex];
+
+    // If ML is enabled, adjust based on patterns
+    if (settings.ml_learning_enabled) {
+        const optimalInterval = await getMLOptimizedIntervalForUser(senderId, attemptCount, intervalMinutes, userId);
+        intervalMinutes = optimalInterval;
+    }
+
+    // Calculate target time
+    let targetTime = new Date(now.getTime() + intervalMinutes * 60000);
+
+    // Adjust for active hours
+    targetTime = adjustForActiveHours(targetTime, settings);
+
+    return targetTime;
+}
+
+/**
+ * Get user-specific follow-up settings
+ */
+async function getFollowUpSettingsForUser(userId: string): Promise<FollowUpSettings> {
+    const { data, error } = await supabaseAdmin
+        .from('follow_up_settings')
+        .select('*')
+        .eq('user_id', userId)
+        .limit(1)
+        .single();
+
+    if (error || !data) {
+        // Return defaults if no user-specific settings found
+        return {
+            base_intervals: [5, 15, 30, 60, 120, 240, 480],
+            min_interval_minutes: 5,
+            max_interval_minutes: 1440,
+            active_hours_start: '08:00:00',
+            active_hours_end: '21:00:00',
+            ml_learning_enabled: true,
+            ml_weight_recent: 0.7,
+            is_enabled: true,
+        };
+    }
+
+    return data as FollowUpSettings;
+}
+
+/**
  * Get ML-optimized interval based on response patterns
  */
 async function getMLOptimizedInterval(
@@ -194,6 +255,94 @@ async function getMLOptimizedInterval(
 }
 
 /**
+ * Get ML-optimized interval based on response patterns for a specific user (multi-tenant safe)
+ * Filters patterns by user_id to ensure data isolation between tenants
+ */
+async function getMLOptimizedIntervalForUser(
+    senderId: string,
+    attemptCount: number,
+    baseInterval: number,
+    userId: string
+): Promise<number> {
+    const settings = await getFollowUpSettingsForUser(userId);
+
+    // Get this lead's response patterns - scoped to user
+    const { data: leadPatterns } = await supabaseAdmin
+        .from('follow_up_response_patterns')
+        .select('hour_of_day, response_delay_minutes, did_respond')
+        .eq('user_id', userId)
+        .eq('sender_id', senderId)
+        .eq('did_respond', true)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+    // Get user-scoped response patterns (successful responses for this tenant only)
+    const { data: userPatterns } = await supabaseAdmin
+        .from('follow_up_response_patterns')
+        .select('hour_of_day, response_delay_minutes, did_respond')
+        .eq('user_id', userId)
+        .eq('did_respond', true)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+    // If no user-scoped patterns exist, fall back to base interval
+    // This ensures we don't accidentally use another tenant's data
+    if ((!leadPatterns || leadPatterns.length === 0) && (!userPatterns || userPatterns.length === 0)) {
+        console.log(`[FollowUp] No user-scoped patterns for user ${userId.substring(0, 8)}..., using base interval`);
+        return baseInterval;
+    }
+
+    // Calculate average response time for this lead
+    let leadAvgDelay = 0;
+    if (leadPatterns && leadPatterns.length > 0) {
+        const delays = leadPatterns
+            .filter(p => p.response_delay_minutes !== null)
+            .map(p => p.response_delay_minutes as number);
+        if (delays.length > 0) {
+            leadAvgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
+        }
+    }
+
+    // Calculate user-scoped average (replaces "global" with tenant-specific)
+    let userAvgDelay = baseInterval;
+    if (userPatterns && userPatterns.length > 0) {
+        const delays = userPatterns
+            .filter(p => p.response_delay_minutes !== null)
+            .map(p => p.response_delay_minutes as number);
+        if (delays.length > 0) {
+            userAvgDelay = delays.reduce((a, b) => a + b, 0) / delays.length;
+        }
+    }
+
+    // Blend lead-specific and user-scoped patterns
+    const mlWeight = settings.ml_weight_recent;
+    let optimizedInterval: number;
+
+    if (leadPatterns && leadPatterns.length >= 3) {
+        // Enough lead data - weight heavily toward lead patterns
+        optimizedInterval = leadAvgDelay * mlWeight + userAvgDelay * (1 - mlWeight);
+    } else if (leadPatterns && leadPatterns.length > 0) {
+        // Some lead data - blend equally
+        optimizedInterval = (leadAvgDelay + userAvgDelay + baseInterval) / 3;
+    } else {
+        // No lead data - use user-scoped patterns with base influence
+        optimizedInterval = userAvgDelay * 0.6 + baseInterval * 0.4;
+    }
+
+    // Apply attempt multiplier (wait longer for later attempts)
+    const attemptMultiplier = 1 + (attemptCount * 0.2);
+    optimizedInterval = optimizedInterval * attemptMultiplier;
+
+    // Clamp to min/max
+    optimizedInterval = Math.max(settings.min_interval_minutes, optimizedInterval);
+    optimizedInterval = Math.min(settings.max_interval_minutes, optimizedInterval);
+
+    console.log(`[FollowUp] ML interval for ${senderId} (user ${userId.substring(0, 8)}...): base=${baseInterval}, optimized=${Math.round(optimizedInterval)}`);
+
+    return Math.round(optimizedInterval);
+}
+
+/**
  * Adjust target time to fall within active hours
  */
 function adjustForActiveHours(targetTime: Date, settings: FollowUpSettings): Date {
@@ -231,6 +380,7 @@ function adjustForActiveHours(targetTime: Date, settings: FollowUpSettings): Dat
 
 /**
  * Find the hour of day when this lead (or leads globally) are most responsive
+ * Note: Without userId, this queries across all tenants (legacy behavior)
  */
 export async function getBestHourToContact(senderId?: string): Promise<number> {
     // Query response patterns grouped by hour
@@ -246,6 +396,48 @@ export async function getBestHourToContact(senderId?: string): Promise<number> {
     const { data: patterns } = await query.limit(200);
 
     if (!patterns || patterns.length === 0) {
+        return 10; // Default: 10 AM
+    }
+
+    // Count responses by hour
+    const hourCounts: Record<number, number> = {};
+    patterns.forEach(p => {
+        hourCounts[p.hour_of_day] = (hourCounts[p.hour_of_day] || 0) + 1;
+    });
+
+    // Find hour with most responses
+    let bestHour = 10;
+    let maxCount = 0;
+    for (const [hour, count] of Object.entries(hourCounts)) {
+        if (count > maxCount) {
+            maxCount = count;
+            bestHour = parseInt(hour);
+        }
+    }
+
+    return bestHour;
+}
+
+/**
+ * Find the hour of day when leads are most responsive for a specific user (multi-tenant safe)
+ * Filters patterns by user_id to ensure data isolation between tenants
+ */
+export async function getBestHourToContactForUser(userId: string, senderId?: string): Promise<number> {
+    // Query response patterns grouped by hour - scoped to user
+    let query = supabaseAdmin
+        .from('follow_up_response_patterns')
+        .select('hour_of_day, did_respond')
+        .eq('user_id', userId)
+        .eq('did_respond', true);
+
+    if (senderId) {
+        query = query.eq('sender_id', senderId);
+    }
+
+    const { data: patterns } = await query.limit(200);
+
+    if (!patterns || patterns.length === 0) {
+        console.log(`[FollowUp] No user-scoped patterns for user ${userId.substring(0, 8)}..., using default hour`);
         return 10; // Default: 10 AM
     }
 
@@ -661,4 +853,168 @@ export async function enableFollowUpsForLead(senderId: string): Promise<void> {
         .from('leads')
         .update({ follow_up_enabled: true })
         .eq('sender_id', senderId);
+}
+
+// ============================================================================
+// MULTI-USER SUPPORT FUNCTIONS
+// ============================================================================
+
+/**
+ * Get leads needing follow-up for a SPECIFIC user
+ * Used by cron job for proper multi-tenancy
+ */
+export async function getLeadsNeedingFollowUpForUser(userId: string, limit: number = 10): Promise<Lead[]> {
+    // Get user-specific settings
+    const { data: userSettings } = await supabaseAdmin
+        .from('follow_up_settings')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+
+    if (!userSettings?.is_enabled) {
+        console.log(`[FollowUp] Follow-ups disabled for user ${userId.substring(0, 8)}...`);
+        return [];
+    }
+
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const todayDate = now.toISOString().split('T')[0];
+
+    // Get excluded stages for this user
+    const { data: excludedStages } = await supabaseAdmin
+        .from('pipeline_stages')
+        .select('id, name')
+        .eq('user_id', userId)
+        .in('name', EXCLUDED_STAGE_NAMES);
+
+    const excludedStageIds = (excludedStages || []).map(s => s.id);
+
+    // Get active orders for this user's leads
+    const { data: activeOrders } = await supabaseAdmin
+        .from('orders')
+        .select('lead_id, leads!inner(sender_id)')
+        .eq('user_id', userId)
+        .in('status', ACTIVE_ORDER_STATUSES);
+
+    const senderIdsWithActiveOrders = new Set(
+        (activeOrders || [])
+            .map(o => {
+                const leadData = o.leads as unknown as { sender_id: string } | null;
+                return leadData?.sender_id;
+            })
+            .filter((id): id is string => Boolean(id))
+    );
+
+    // Get upcoming appointments for this user
+    const { data: upcomingAppointments } = await supabaseAdmin
+        .from('appointments')
+        .select('sender_psid')
+        .eq('user_id', userId)
+        .in('status', ACTIVE_APPOINTMENT_STATUSES)
+        .gte('appointment_date', todayDate);
+
+    const senderIdsWithAppointments = new Set(
+        (upcomingAppointments || []).map(a => a.sender_psid)
+    );
+
+    // Query leads for this specific user
+    const { data: leads, error } = await supabaseAdmin
+        .from('leads')
+        .select('id, sender_id, name, follow_up_count, last_bot_message_at, last_customer_message_at, next_follow_up_at, follow_up_enabled, current_stage_id')
+        .eq('user_id', userId)
+        .eq('follow_up_enabled', true)
+        .eq('bot_disabled', false)
+        .not('next_follow_up_at', 'is', null)
+        .lte('next_follow_up_at', nowIso)
+        .order('next_follow_up_at', { ascending: true })
+        .limit(limit * 3);
+
+    if (error) {
+        console.error(`[FollowUp] Error fetching leads for user ${userId.substring(0, 8)}...:`, error);
+        return [];
+    }
+
+    // Apply same exclusion filters
+    const filtered = (leads || []).filter(lead => {
+        if (!lead.last_bot_message_at) return false;
+        if (lead.last_customer_message_at &&
+            new Date(lead.last_customer_message_at) > new Date(lead.last_bot_message_at)) return false;
+        if (lead.current_stage_id && excludedStageIds.includes(lead.current_stage_id)) return false;
+        if (senderIdsWithActiveOrders.has(lead.sender_id)) return false;
+        if (senderIdsWithAppointments.has(lead.sender_id)) return false;
+        return true;
+    });
+
+    return filtered.slice(0, limit) as Lead[];
+}
+
+/**
+ * Send a follow-up message to a lead for a specific user
+ * Uses supabaseAdmin for proper multi-tenancy
+ */
+export async function sendFollowUpForUser(lead: Lead, userId: string): Promise<boolean> {
+    console.log(`[FollowUp] Sending follow-up #${lead.follow_up_count + 1} to ${lead.name || lead.sender_id} for user ${userId.substring(0, 8)}...`);
+
+    try {
+        // Generate AI message
+        const message = await generateFollowUpMessage(lead.sender_id, lead.follow_up_count);
+        console.log(`[FollowUp] Generated message: ${message}`);
+
+        // Send via Messenger with message tag (for outside 24hr window)
+        const sent = await sendMessengerMessage(lead.sender_id, message, {
+            messagingType: 'MESSAGE_TAG',
+            tag: 'ACCOUNT_UPDATE',
+        });
+
+        if (!sent) {
+            console.error('[FollowUp] Failed to send message');
+            return false;
+        }
+
+        // Track the pattern with user_id
+        const now = new Date();
+        await supabaseAdmin.from('follow_up_response_patterns').insert({
+            user_id: userId,
+            lead_id: lead.id,
+            sender_id: lead.sender_id,
+            follow_up_sent_at: now.toISOString(),
+            hour_of_day: now.getHours(),
+            day_of_week: now.getDay(),
+            follow_up_attempt: lead.follow_up_count + 1,
+            message_type: FOLLOW_UP_STRATEGIES[lead.follow_up_count % FOLLOW_UP_STRATEGIES.length].name,
+            did_respond: false,
+        });
+
+        // Calculate next follow-up time using user-scoped function
+        const nextFollowUpTime = await calculateOptimalFollowUpTimeForUser(
+            lead.sender_id,
+            lead.follow_up_count + 1,
+            userId
+        );
+
+        // Update lead using supabaseAdmin
+        await supabaseAdmin
+            .from('leads')
+            .update({
+                follow_up_count: lead.follow_up_count + 1,
+                last_bot_message_at: now.toISOString(),
+                next_follow_up_at: nextFollowUpTime.toISOString(),
+            })
+            .eq('id', lead.id)
+            .eq('user_id', userId);
+
+        // Store the message in conversation history with user_id
+        await supabaseAdmin.from('conversations').insert({
+            user_id: userId,
+            sender_id: lead.sender_id,
+            role: 'assistant',
+            content: message,
+        });
+
+        console.log(`[FollowUp] Success! Next follow-up at ${nextFollowUpTime.toISOString()}`);
+        return true;
+    } catch (error) {
+        console.error('[FollowUp] Error sending follow-up:', error);
+        return false;
+    }
 }

@@ -1,12 +1,21 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - List all product categories
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('product_categories')
             .select('*')
+            .eq('user_id', userId)
             .order('display_order', { ascending: true });
 
         if (error) {
@@ -24,6 +33,13 @@ export async function GET() {
 // POST - Create new product category
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { name, description, color, displayOrder } = body;
 
@@ -34,6 +50,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('product_categories')
             .insert({
+                user_id: userId,
                 name,
                 description: description || null,
                 color: color || '#6B7280',
@@ -57,6 +74,13 @@ export async function POST(req: Request) {
 // PATCH - Update product category
 export async function PATCH(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const body = await req.json();
         const { id, name, description, color, displayOrder } = body;
 
@@ -64,8 +88,7 @@ export async function PATCH(req: Request) {
             return NextResponse.json({ error: 'Category ID is required' }, { status: 400 });
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const updates: any = {};
+        const updates: Record<string, unknown> = {};
         if (name !== undefined) updates.name = name;
         if (description !== undefined) updates.description = description;
         if (color !== undefined) updates.color = color;
@@ -75,6 +98,7 @@ export async function PATCH(req: Request) {
             .from('product_categories')
             .update(updates)
             .eq('id', id)
+            .eq('user_id', userId)
             .select()
             .single();
 
@@ -93,6 +117,13 @@ export async function PATCH(req: Request) {
 // DELETE - Delete product category
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -103,7 +134,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('product_categories')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting product category:', error);

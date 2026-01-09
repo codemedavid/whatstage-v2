@@ -1,9 +1,11 @@
 import { supabase } from './supabase';
+import { supabaseAdmin } from './supabaseAdmin';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { semanticChunk, shouldUseSemanticChunking } from './semanticChunker';
 
 const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY;
 const EMBEDDING_MODEL = 'nvidia/nv-embedqa-e5-v5';
+const EXPECTED_EMBEDDING_DIMENSIONS = 1024;
 
 async function getEmbedding(text: string, inputType: 'query' | 'passage'): Promise<number[]> {
     const response = await fetch('https://integrate.api.nvidia.com/v1/embeddings', {
@@ -67,6 +69,7 @@ export interface UnifiedSearchOptions {
     mediaLimit?: number;
     documentThreshold?: number;
     mediaThreshold?: number;
+    userId?: string;  // Filter results to specific user
 }
 
 /**
@@ -87,27 +90,109 @@ export async function searchAllSources(
         mediaLimit = 3,
         documentThreshold = 0.35,
         mediaThreshold = 0.45,
+        userId,
     } = options;
 
     try {
-        console.log(`[RAG] Unified search for: "${query.substring(0, 50)}..."`);
+        console.log(`[RAG] Unified search for: "${query.substring(0, 50)}..." userId: ${userId || 'none'}`);
+
+        // If userId is provided, use user-filtered search
+        if (userId) {
+            // Direct query with user filter for documents
+            const queryEmbedding = await getEmbedding(query, 'query');
+
+            // Search documents filtered by user_id
+            const { data: userDocs, error: docError } = await supabaseAdmin
+                .from('documents')
+                .select('id, content, metadata, embedding')
+                .eq('user_id', userId)
+                .limit(documentLimit);  // Fetch exact limit to reduce JS work
+
+            if (docError) {
+                console.error('[RAG] User document search error:', docError);
+            }
+
+            // Calculate similarity scores for user's documents
+            let documentResults: UnifiedSearchResult[] = [];
+            const EPSILON = 1e-10; // Guard against division by zero
+
+            // Track mismatched embeddings for diagnostics
+            let mismatchedCount = 0;
+
+            if (userDocs && userDocs.length > 0) {
+                documentResults = userDocs
+                    .map(doc => {
+                        // Calculate cosine similarity if embedding exists
+                        let similarity = 0.5; // Default
+                        if (doc.embedding && queryEmbedding) {
+                            // Skip if embedding lengths mismatch (corrupted data)
+                            if (doc.embedding.length !== queryEmbedding.length) {
+                                mismatchedCount++;
+                                // Only log first few to avoid spam
+                                if (mismatchedCount <= 3) {
+                                    console.warn(`[RAG] Embedding mismatch doc=${doc.id}: ${doc.embedding.length} dims (expected ${EXPECTED_EMBEDDING_DIMENSIONS}). Run: npx ts-node scripts/reembed-documents.ts --user-id ${userId}`);
+                                }
+                                return {
+                                    sourceType: 'document' as const,
+                                    content: doc.content,
+                                    similarity: 0, // Skip this document in filtering
+                                    metadata: doc.metadata || {},
+                                };
+                            }
+
+                            const dotProduct = queryEmbedding.reduce((sum, val, i) => sum + val * doc.embedding[i], 0);
+                            const magA = Math.sqrt(queryEmbedding.reduce((sum, val) => sum + val * val, 0));
+                            const magB = Math.sqrt(doc.embedding.reduce((sum: number, val: number) => sum + val * val, 0));
+
+                            // Guard against zero magnitude (corrupted all-zero embeddings)
+                            if (magA <= EPSILON || magB <= EPSILON) {
+                                similarity = 0;
+                            } else {
+                                similarity = dotProduct / (magA * magB);
+                            }
+                        }
+                        return {
+                            sourceType: 'document' as const,
+                            content: doc.content,
+                            similarity,
+                            metadata: doc.metadata || {},
+                        };
+                    })
+                    .filter(d => d.similarity >= documentThreshold)
+                    .sort((a, b) => b.similarity - a.similarity)
+                    .slice(0, documentLimit);
+            }
+
+            // Log summary of mismatched embeddings
+            if (mismatchedCount > 0) {
+                console.warn(`[RAG] ⚠️ ${mismatchedCount} documents have mismatched embeddings and were skipped. Run re-embed script to fix.`);
+            }
+
+            const documents = documentResults.map(d => d.content).join('\n\n');
+
+            console.log(`[RAG] User-filtered results: ${documentResults.length} docs for user ${userId}`);
+
+            // TODO: Also filter media by user_id when media supports it
+            return { documents, relevantMedia: [], allResults: documentResults };
+        }
 
         // Generate query embedding once
         const queryEmbedding = await getEmbedding(query, 'query');
 
-        // Call unified search RPC
+        // Call unified search RPC with user filtering
         const { data, error } = await supabase.rpc('search_all_sources', {
             query_embedding: queryEmbedding,
             doc_threshold: documentThreshold,
             media_threshold: includeMedia ? mediaThreshold : 1.0,
             doc_count: documentLimit,
             media_count: includeMedia ? mediaLimit : 0,
+            filter_user_id: userId || null, // Pass user_id for multi-tenant filtering
         });
 
         if (error) {
             console.error('[RAG] Unified search error:', error);
-            // Fallback to standard document search
-            const fallbackDocs = await searchDocuments(query, documentLimit);
+            // Fallback to standard document search (with user filtering)
+            const fallbackDocs = await searchDocuments(query, documentLimit, {}, userId);
             return { documents: fallbackDocs, relevantMedia: [], allResults: [] };
         }
 
@@ -164,7 +249,7 @@ export async function searchAllSources(
         return { documents, relevantMedia, allResults };
     } catch (err) {
         console.error('[RAG] Unified search failed:', err);
-        const fallbackDocs = await searchDocuments(query, options.documentLimit || 5);
+        const fallbackDocs = await searchDocuments(query, options.documentLimit || 5, {}, userId);
         return { documents: fallbackDocs, relevantMedia: [], allResults: [] };
     }
 }
@@ -172,6 +257,7 @@ export async function searchAllSources(
 // Enriched metadata interface for documents
 export interface DocumentMetadata {
     categoryId?: string;
+    userId?: string;          // User who owns this document
     sourceType?: string;      // 'user_upload', 'setup_wizard', 'faq', 'api_import'
     confidenceScore?: number; // 0.0 - 1.0
     verifiedAt?: string;      // ISO date string
@@ -180,10 +266,10 @@ export interface DocumentMetadata {
 }
 
 
- 
+
 export async function addDocument(content: string, metadata: DocumentMetadata = {}) {
     try {
-        const { categoryId, sourceType, confidenceScore, verifiedAt, expiresAt, ...restMetadata } = metadata;
+        const { categoryId, userId, sourceType, confidenceScore, verifiedAt, expiresAt, ...restMetadata } = metadata;
 
         let chunks: string[];
         let chunkingMethod: string;
@@ -214,6 +300,12 @@ export async function addDocument(content: string, metadata: DocumentMetadata = 
         for (const chunkContent of chunks) {
             const embedding = await getEmbedding(chunkContent, 'passage');
 
+            // Validate embedding dimensions before storing
+            if (embedding.length !== EXPECTED_EMBEDDING_DIMENSIONS) {
+                console.error(`[RAG] ❌ Embedding dimension mismatch! Got ${embedding.length}, expected ${EXPECTED_EMBEDDING_DIMENSIONS}. Skipping chunk.`);
+                continue;
+            }
+
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const insertData: any = {
                 content: chunkContent,
@@ -222,13 +314,18 @@ export async function addDocument(content: string, metadata: DocumentMetadata = 
             };
 
             // Add optional enriched metadata fields
+            if (userId) insertData.user_id = userId;
             if (categoryId) insertData.category_id = categoryId;
             if (sourceType) insertData.source_type = sourceType;
             if (confidenceScore !== undefined) insertData.confidence_score = confidenceScore;
             if (verifiedAt) insertData.verified_at = verifiedAt;
             if (expiresAt) insertData.expires_at = expiresAt;
 
-            let { error } = await supabase.from('documents').insert(insertData);
+            // Use supabaseAdmin when userId is explicitly provided (server-side context)
+            // This bypasses RLS since the service role is being used
+            const dbClient = userId ? supabaseAdmin : supabase;
+
+            let { error } = await dbClient.from('documents').insert(insertData);
 
             // Retry without new columns if they don't exist (backward compatibility)
             if (error && (error.message?.includes('category_id') ||
@@ -242,12 +339,12 @@ export async function addDocument(content: string, metadata: DocumentMetadata = 
                 delete insertData.confidence_score;
                 delete insertData.verified_at;
                 delete insertData.expires_at;
-                const retryResult = await supabase.from('documents').insert(insertData);
+                const retryResult = await dbClient.from('documents').insert(insertData);
                 error = retryResult.error;
             }
 
             if (error) {
-                console.error('Error inserting chunk:', error);
+                console.error('[RAG] Error inserting chunk:', error);
                 throw error;
             }
 
@@ -300,26 +397,32 @@ const DEFAULT_SEARCH_CONFIG: SearchConfig = {
  * 2. Keyword search for specific query types
  * 3. Recent documents as fallback
  * 4. Apply hybrid weights and re-rank results
+ * @param userId - Optional user ID to filter documents for multi-tenancy
  */
 export async function searchDocuments(
     query: string,
     limit: number = 5,
-    config: Partial<SearchConfig> = {}
+    config: Partial<SearchConfig> = {},
+    userId?: string
 ) {
     const cfg = { ...DEFAULT_SEARCH_CONFIG, ...config };
+    // Use admin client when filtering by userId to bypass RLS
+    const dbClient = userId ? supabaseAdmin : supabase;
 
     try {
-        console.log(`[RAG] Searching for: "${query}" (threshold: ${cfg.similarityThreshold})`);
+        console.log(`[RAG] Searching for: "${query}" (threshold: ${cfg.similarityThreshold}, userId: ${userId || 'none'})`);
 
         // STRATEGY 1: Semantic search with embedding
         let semanticDocs: StoredDocument[] = [];
         try {
             const queryEmbedding = await getEmbedding(query, 'query');
 
+            // Pass filter_user_id for multi-tenant isolation
             const { data: matchedDocs, error: matchError } = await supabase.rpc('match_documents', {
                 query_embedding: queryEmbedding,
                 match_threshold: cfg.similarityThreshold,
                 match_count: limit * 2, // Get more candidates for re-ranking
+                filter_user_id: userId || null, // Filter by user for multi-tenancy
             });
 
             if (!matchError && matchedDocs) {
@@ -345,11 +448,17 @@ export async function searchDocuments(
             lowerQuery.includes('presyo');
 
         if (isPriceQuery) {
-            const { data: priceDocs, error: priceError } = await supabase
+            let keywordQuery = dbClient
                 .from('documents')
                 .select('id, content, metadata')
-                .or('content.ilike.%price%,content.ilike.%payment%,content.ilike.%magkano%')
-                .limit(5);
+                .or('content.ilike.%price%,content.ilike.%payment%,content.ilike.%magkano%');
+
+            // Filter by user_id for multi-tenancy
+            if (userId) {
+                keywordQuery = keywordQuery.eq('user_id', userId);
+            }
+
+            const { data: priceDocs, error: priceError } = await keywordQuery.limit(5);
 
             if (!priceError && priceDocs) {
                 keywordDocs = priceDocs.map(doc => ({
@@ -362,11 +471,17 @@ export async function searchDocuments(
 
         // STRATEGY 3: Recent documents as fallback
         let recentDocs: StoredDocument[] = [];
-        const { data: recentData, error: recentError } = await supabase
+        let recentQuery = dbClient
             .from('documents')
             .select('id, content, metadata')
-            .order('id', { ascending: false })
-            .limit(3);
+            .order('id', { ascending: false });
+
+        // Filter by user_id for multi-tenancy
+        if (userId) {
+            recentQuery = recentQuery.eq('user_id', userId);
+        }
+
+        const { data: recentData, error: recentError } = await recentQuery.limit(3);
 
         if (!recentError && recentData) {
             recentDocs = recentData.map(doc => ({
@@ -437,15 +552,20 @@ export async function searchDocuments(
 
     } catch (error) {
         console.error('Error in RAG search:', error);
-        // Last resort: just get any documents we have
+        // Last resort: just get any documents we have (filtered by user if provided)
         try {
-            const { data: fallbackDocs } = await supabase
+            let fallbackQuery = dbClient
                 .from('documents')
-                .select('content')
-                .limit(3);
+                .select('content');
+
+            if (userId) {
+                fallbackQuery = fallbackQuery.eq('user_id', userId);
+            }
+
+            const { data: fallbackDocs } = await fallbackQuery.limit(3);
 
             if (fallbackDocs && fallbackDocs.length > 0) {
-                console.log('[RAG] Using fallback - returning all docs');
+                console.log(`[RAG] Using fallback - returning docs for user ${userId || 'all'}`);
                 return fallbackDocs.map(d => d.content).join('\n\n');
             }
         } catch (e) {

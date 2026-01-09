@@ -1,12 +1,21 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/lib/supabase';
+import { createClient, getCurrentUserId } from '@/app/lib/supabaseServer';
 
 // GET - List all categories
 export async function GET() {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
+
         const { data, error } = await supabase
             .from('knowledge_categories')
             .select('*')
+            .eq('user_id', userId)
             .order('created_at', { ascending: true });
 
         if (error) {
@@ -24,6 +33,13 @@ export async function GET() {
 // POST - Create a new category
 export async function POST(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { name, type, color } = await req.json();
 
         if (!name) {
@@ -33,6 +49,7 @@ export async function POST(req: Request) {
         const { data, error } = await supabase
             .from('knowledge_categories')
             .insert({
+                user_id: userId,
                 name,
                 type: type || 'general',
                 color: color || 'gray',
@@ -55,6 +72,13 @@ export async function POST(req: Request) {
 // DELETE - Remove a category
 export async function DELETE(req: Request) {
     try {
+        const userId = await getCurrentUserId();
+
+        if (!userId) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+
+        const supabase = await createClient();
         const { searchParams } = new URL(req.url);
         const id = searchParams.get('id');
 
@@ -65,7 +89,8 @@ export async function DELETE(req: Request) {
         const { error } = await supabase
             .from('knowledge_categories')
             .delete()
-            .eq('id', id);
+            .eq('id', id)
+            .eq('user_id', userId);
 
         if (error) {
             console.error('Error deleting category:', error);

@@ -1,8 +1,7 @@
 import { Suspense } from 'react';
-import { supabase } from '@/app/lib/supabase';
+import { supabaseAdmin, getUserIdFromPageId } from '@/app/lib/supabaseAdmin';
 import { Loader2 } from 'lucide-react';
 import BookingPageClient from './BookingPageClient';
-import { unstable_cache } from 'next/cache';
 
 interface AppointmentSettings {
     business_hours_start: string;
@@ -37,40 +36,39 @@ const defaultSettings: AppointmentSettings = {
     is_active: true,
 };
 
-// Fetch appointment settings on the server (cached for 5 minutes)
-const getAppointmentSettings = unstable_cache(
-    async (): Promise<AppointmentSettings> => {
-        try {
-            const { data, error } = await supabase
-                .from('appointment_settings')
-                .select('*')
-                .limit(1)
-                .single();
+// Fetch appointment settings on the server for a specific user (cached for 5 minutes)
+async function getAppointmentSettings(userId: string): Promise<AppointmentSettings> {
+    if (!userId) return defaultSettings;
 
-            if (error || !data) {
-                return defaultSettings;
-            }
+    try {
+        const { data, error } = await supabaseAdmin
+            .from('appointment_settings')
+            .select('*')
+            .eq('user_id', userId)
+            .single();
 
-            return data as AppointmentSettings;
-        } catch (error) {
-            console.error('Failed to fetch appointment settings:', error);
+        if (error || !data) {
             return defaultSettings;
         }
-    },
-    ['appointment-settings'],
-    { revalidate: 300, tags: ['appointment-settings'] } // Cache for 5 minutes
-);
 
-// Fetch existing appointments for a customer (cached for 60 seconds per customer)
-async function getExistingAppointments(senderPsid: string): Promise<Appointment[]> {
-    if (!senderPsid) return [];
+        return data as AppointmentSettings;
+    } catch (error) {
+        console.error('Failed to fetch appointment settings:', error);
+        return defaultSettings;
+    }
+}
+
+// Fetch existing appointments for a customer filtered by user
+async function getExistingAppointments(senderPsid: string, userId: string): Promise<Appointment[]> {
+    if (!senderPsid || !userId) return [];
 
     try {
         const today = new Date().toISOString().split('T')[0];
 
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('appointments')
             .select('id, appointment_date, start_time, end_time, status, customer_name, notes')
+            .eq('user_id', userId)
             .eq('sender_psid', senderPsid)
             .gte('appointment_date', today)
             .neq('status', 'cancelled')
@@ -90,19 +88,38 @@ async function getExistingAppointments(senderPsid: string): Promise<Appointment[
 }
 
 // Server component to wrap the data fetching
-async function BookingPageContent({ senderPsid, pageId, propertyId, bookingType }: { senderPsid: string; pageId: string; propertyId?: string; bookingType?: string }) {
+async function BookingPageContent({ senderPsid, pageId, propertyId, bookingType, userId }: { senderPsid: string; pageId: string; propertyId?: string; bookingType?: string; userId: string | null }) {
+    // If no valid userId, show error
+    if (!userId) {
+        return (
+            <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-teal-50 flex items-center justify-center p-4">
+                <div className="max-w-md w-full bg-white rounded-3xl p-8 shadow-xl text-center">
+                    <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                        <Loader2 className="text-red-500" size={40} />
+                    </div>
+                    <h1 className="text-2xl font-bold text-gray-900 mb-2">Booking Unavailable</h1>
+                    <p className="text-gray-600 mb-6">
+                        This booking link appears to be invalid or the page is no longer connected.
+                        Please contact the business directly for assistance.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     // Parallel fetch for settings and existing appointments
     const [settings, existingAppointments] = await Promise.all([
-        getAppointmentSettings(),
-        getExistingAppointments(senderPsid),
+        getAppointmentSettings(userId),
+        getExistingAppointments(senderPsid, userId),
     ]);
 
     let property = null;
-    if (propertyId) {
-        const { data } = await supabase
+    if (propertyId && userId) {
+        const { data } = await supabaseAdmin
             .from('properties')
             .select('id, title, address, image_url, price')
             .eq('id', propertyId)
+            .eq('user_id', userId)
             .single();
         property = data;
     }
@@ -130,6 +147,9 @@ export default async function BookingPage({
     const propertyId = params.propertyId;
     const bookingType = params.type;
 
+    // Resolve user_id from pageId via connected_pages table
+    const userId = pageId ? await getUserIdFromPageId(pageId) : null;
+
     return (
         <Suspense
             fallback={
@@ -146,7 +166,9 @@ export default async function BookingPage({
                 pageId={pageId}
                 propertyId={propertyId}
                 bookingType={bookingType}
+                userId={userId}
             />
         </Suspense>
     );
 }
+
