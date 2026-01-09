@@ -25,7 +25,7 @@ export async function subscribePageWebhook(
             },
             body: JSON.stringify({
                 access_token: pageAccessToken,
-                subscribed_fields: ['messages', 'messaging_postbacks', 'messaging_optins', 'messaging_referrals'],
+                subscribed_fields: ['messages', 'message_echoes', 'messaging_postbacks', 'messaging_optins', 'messaging_referrals'],
             }),
         });
 
