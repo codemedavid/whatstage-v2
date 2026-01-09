@@ -116,13 +116,28 @@ export async function handlePostWebhook(req: Request) {
 
                 if (isEchoMessage) {
                     // This is a message sent BY the page (human agent) TO a customer
-                    // The recipient is the customer, start takeover for them
-                    console.log('📢 MESSAGE ECHO detected! Human agent sent message to:', recipient_psid);
-                    waitUntil(
-                        startOrRefreshTakeover(recipient_psid).catch(err => {
-                            console.error('Error starting takeover:', err);
-                        })
-                    );
+                    // For echo messages:
+                    //   - sender.id = Page ID (who sent the message)  
+                    //   - recipient.id = Customer PSID (who received the message)
+                    const customerPsid = webhook_event.recipient?.id;
+                    const pageId = webhook_event.sender?.id;
+
+                    // Look up user from the page that sent the message
+                    let echoUserId: string | null = null;
+                    if (pageId) {
+                        const pageInfo = await getPageTokenAndUser(pageId);
+                        echoUserId = pageInfo.userId;
+                    }
+
+                    console.log('📢 MESSAGE ECHO detected! Human agent sent message to:', customerPsid, 'from page:', pageId, 'userId:', echoUserId);
+
+                    if (customerPsid) {
+                        waitUntil(
+                            startOrRefreshTakeover(customerPsid, echoUserId).catch(err => {
+                                console.error('Error starting takeover:', err);
+                            })
+                        );
+                    }
                     continue;
                 }
 

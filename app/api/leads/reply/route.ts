@@ -25,10 +25,10 @@ export async function POST(req: Request) {
         let lead;
 
         if (leadId) {
-            // Fetch lead to get sender_id and page_id
+            // Fetch lead to get sender_id, page_id, and user_id
             const { data, error } = await supabase
                 .from('leads')
-                .select('id, sender_id, page_id')
+                .select('id, sender_id, page_id, user_id')
                 .eq('id', leadId)
                 .single();
 
@@ -44,7 +44,7 @@ export async function POST(req: Request) {
             // Find lead by sender_id
             const { data, error } = await supabase
                 .from('leads')
-                .select('id, sender_id, page_id')
+                .select('id, sender_id, page_id, user_id')
                 .eq('sender_id', senderId)
                 .single();
 
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
         // Start human takeover BEFORE sending the message
         // This ensures the bot won't respond to any incoming messages
         console.log('[AgentReply] Starting human takeover for:', lead.sender_id);
-        await startOrRefreshTakeover(lead.sender_id);
+        await startOrRefreshTakeover(lead.sender_id, lead.user_id);
 
         // Send the message via Facebook Messenger
         console.log('[AgentReply] Sending message to:', lead.sender_id);

@@ -1,35 +1,45 @@
-import { supabase } from './supabase';
+import { supabaseAdmin } from './supabaseAdmin';
 import { deactivateSmartPassive } from './smartPassiveService';
 
 // Cache settings to avoid database calls on every request
-let cachedTimeout: number | null = null;
-let timeoutLastFetched = 0;
+// Key: userId, Value: { timeout, fetchedAt }
+const cachedTimeouts = new Map<string, { timeout: number; fetchedAt: number }>();
 const TIMEOUT_CACHE_MS = 60000; // 1 minute cache
 
 /**
  * Get the human takeover timeout setting from bot_settings
  */
-export async function getHumanTakeoverTimeout(): Promise<number> {
+export async function getHumanTakeoverTimeout(userId?: string | null): Promise<number> {
+    const cacheKey = userId || 'default';
     const now = Date.now();
-    if (cachedTimeout !== null && now - timeoutLastFetched < TIMEOUT_CACHE_MS) {
-        return cachedTimeout;
+    const cached = cachedTimeouts.get(cacheKey);
+
+    if (cached && now - cached.fetchedAt < TIMEOUT_CACHE_MS) {
+        return cached.timeout;
     }
 
     try {
-        const { data, error } = await supabase
+        let query = supabaseAdmin
             .from('bot_settings')
-            .select('human_takeover_timeout_minutes')
-            .limit(1)
-            .single();
+            .select('human_takeover_timeout_minutes');
+
+        if (userId) {
+            query = query.eq('user_id', userId);
+        } else {
+            // Explicitly query for global default where user_id is NULL
+            query = query.is('user_id', null);
+        }
+
+        const { data, error } = await query.limit(1).single();
 
         if (error) {
             console.error('Error fetching takeover timeout:', error);
             return 5; // Default 5 minutes
         }
 
-        cachedTimeout = data?.human_takeover_timeout_minutes ?? 5;
-        timeoutLastFetched = now;
-        return cachedTimeout ?? 5;
+        const timeout = data?.human_takeover_timeout_minutes ?? 5;
+        cachedTimeouts.set(cacheKey, { timeout, fetchedAt: now });
+        return timeout;
     } catch (error) {
         console.error('Error fetching takeover timeout:', error);
         return 5;
@@ -39,37 +49,47 @@ export async function getHumanTakeoverTimeout(): Promise<number> {
 /**
  * Clear the cached timeout (call when settings are updated)
  */
-export function clearTakeoverTimeoutCache() {
-    cachedTimeout = null;
-    timeoutLastFetched = 0;
+export function clearTakeoverTimeoutCache(userId?: string | null) {
+    if (userId) {
+        cachedTimeouts.delete(userId);
+    } else {
+        cachedTimeouts.clear();
+    }
 }
 
 /**
  * Start or refresh a human takeover session for a lead
  * Called when a human agent sends a message to a customer
+ * @param leadSenderId - The customer's sender ID (PSID)
+ * @param userId - The user/tenant ID who owns this conversation
  */
-export async function startOrRefreshTakeover(leadSenderId: string): Promise<void> {
+export async function startOrRefreshTakeover(leadSenderId: string, userId?: string | null): Promise<void> {
     try {
-        const timeoutMinutes = await getHumanTakeoverTimeout();
+        const timeoutMinutes = await getHumanTakeoverTimeout(userId);
+
+        // Build the upsert data - include user_id if available
+        const upsertData: Record<string, unknown> = {
+            lead_sender_id: leadSenderId,
+            last_human_message_at: new Date().toISOString(),
+            timeout_minutes: timeoutMinutes,
+        };
+
+        if (userId) {
+            upsertData.user_id = userId;
+        }
 
         // Upsert the takeover session (insert or update if exists)
-        const { error } = await supabase
+        // Using supabaseAdmin to bypass RLS
+        const { error } = await supabaseAdmin
             .from('human_takeover_sessions')
-            .upsert(
-                {
-                    lead_sender_id: leadSenderId,
-                    last_human_message_at: new Date().toISOString(),
-                    timeout_minutes: timeoutMinutes,
-                },
-                {
-                    onConflict: 'lead_sender_id',
-                }
-            );
+            .upsert(upsertData, {
+                onConflict: 'lead_sender_id',
+            });
 
         if (error) {
             console.error('Error starting/refreshing takeover:', error);
         } else {
-            console.log(`Human takeover started/refreshed for ${leadSenderId}, timeout: ${timeoutMinutes} minutes`);
+            console.log(`Human takeover started/refreshed for ${leadSenderId}, timeout: ${timeoutMinutes} minutes, userId: ${userId || 'none'}`);
 
             // Also deactivate Smart Passive mode since human is now handling this
             await deactivateSmartPassive(leadSenderId);
@@ -85,7 +105,7 @@ export async function startOrRefreshTakeover(leadSenderId: string): Promise<void
  */
 export async function isTakeoverActive(leadSenderId: string): Promise<boolean> {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseAdmin
             .from('human_takeover_sessions')
             .select('last_human_message_at, timeout_minutes')
             .eq('lead_sender_id', leadSenderId)
@@ -131,7 +151,7 @@ export async function isTakeoverActive(leadSenderId: string): Promise<boolean> {
  */
 export async function endTakeover(leadSenderId: string): Promise<void> {
     try {
-        const { error } = await supabase
+        const { error } = await supabaseAdmin
             .from('human_takeover_sessions')
             .delete()
             .eq('lead_sender_id', leadSenderId);
@@ -149,7 +169,7 @@ export async function endTakeover(leadSenderId: string): Promise<void> {
  */
 export async function manuallyEndTakeover(leadSenderId: string): Promise<boolean> {
     try {
-        const { error } = await supabase
+        const { error } = await supabaseAdmin
             .from('human_takeover_sessions')
             .delete()
             .eq('lead_sender_id', leadSenderId);

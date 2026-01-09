@@ -37,7 +37,6 @@ export async function updateSession(request: NextRequest) {
 
     // Protected routes - redirect to login if not authenticated
     const isLoginPage = request.nextUrl.pathname === '/login';
-    const isRegisterPage = request.nextUrl.pathname === '/register';
     const isAuthCallback = request.nextUrl.pathname.startsWith('/auth/callback');
     const isApiRoute = request.nextUrl.pathname.startsWith('/api');
     // Allow public access to product/property detail pages
@@ -50,15 +49,15 @@ export async function updateSession(request: NextRequest) {
     const isStorePage = request.nextUrl.pathname === '/store';
     const isAdminPage = request.nextUrl.pathname.startsWith('/admin'); // Central Router admin
 
-    if (!user && !isLoginPage && !isRegisterPage && !isAuthCallback && !isApiRoute && !isPublicProductPage && !isPublicPropertyPage && !isDigitalProductPage && !isPublicFormPage && !isBookingPage && !isCheckoutPage && !isStorePage && !isAdminPage) {
+    if (!user && !isLoginPage && !isAuthCallback && !isApiRoute && !isPublicProductPage && !isPublicPropertyPage && !isDigitalProductPage && !isPublicFormPage && !isBookingPage && !isCheckoutPage && !isStorePage && !isAdminPage) {
         // Redirect unauthenticated users to login
         const url = request.nextUrl.clone();
         url.pathname = '/login';
         return NextResponse.redirect(url);
     }
 
-    if (user && (isLoginPage || isRegisterPage)) {
-        // Redirect authenticated users away from login/register pages
+    if (user && isLoginPage) {
+        // Redirect authenticated users away from login page to dashboard
         const url = request.nextUrl.clone();
         url.pathname = '/';
         return NextResponse.redirect(url);

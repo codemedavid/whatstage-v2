@@ -53,10 +53,10 @@ export async function POST(req: Request) {
             );
         }
 
-        // Fetch lead to get page_id
+        // Fetch lead to get page_id and user_id
         const { data: lead, error: leadError } = await supabase
             .from('leads')
-            .select('id, sender_id, page_id')
+            .select('id, sender_id, page_id, user_id')
             .eq('sender_id', senderId)
             .single();
 
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
         // Start/refresh human takeover before sending the card (non-blocking)
         console.log('[SendCard] Starting human takeover for:', senderId);
         try {
-            await startOrRefreshTakeover(senderId);
+            await startOrRefreshTakeover(senderId, lead.user_id);
         } catch (takeoverError) {
             // Log but don't fail the request - we still want to send the card
             console.error('[SendCard] Error starting takeover (continuing anyway):', takeoverError);
