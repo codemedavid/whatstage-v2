@@ -3,7 +3,7 @@ import Sidebar from "../components/Sidebar";
 import ClientLayoutWrapper from "../components/ClientLayoutWrapper";
 
 export const metadata: Metadata = {
-    title: "WhatStage? AI Chat & Pipeline",
+    title: "Tanaw AI Chat & Pipeline",
     description: "AI Chat & Pipeline",
 };
 

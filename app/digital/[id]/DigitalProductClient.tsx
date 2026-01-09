@@ -684,7 +684,7 @@ export default function DigitalProductClient({ product: initialProduct, initialF
                                                 </svg>
                                             </div>
                                             <div>
-                                                <div className="text-sm font-bold text-gray-900">{product.creator_name || 'WhatStage Team'}</div>
+                                                <div className="text-sm font-bold text-gray-900">{product.creator_name || 'Tanaw AI Team'}</div>
                                                 <div className="text-xs text-gray-500">{product.creator_name ? 'Creator' : 'Official Creator'}</div>
                                             </div>
                                         </div>
@@ -695,7 +695,7 @@ export default function DigitalProductClient({ product: initialProduct, initialF
                             <div className="text-center mt-8">
                                 <a href="#" className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors">
                                     <span className="font-medium">Powered by</span>
-                                    <span className="font-bold text-gray-600">WhatStage</span>
+                                    <span className="font-bold text-gray-600">Tanaw AI</span>
                                 </a>
                             </div>
                         </div>

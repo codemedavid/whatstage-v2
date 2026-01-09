@@ -184,9 +184,9 @@ export default function RegisterPage() {
             {/* Header */}
             <header className="px-6 py-6 md:px-12 flex justify-between items-center z-10">
                 <div className="flex flex-col">
-                    <h1 className="text-2xl font-bold tracking-tight text-gray-900">WhatStage?</h1>
+                    <h1 className="text-2xl font-bold tracking-tight text-gray-900">Tanaw AI</h1>
                     <div className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                        Sales@WhatStage.com <span className="text-gray-400">→</span>
+                        Sales@TanawAI.com <span className="text-gray-400">→</span>
                     </div>
                 </div>
 
@@ -219,7 +219,7 @@ export default function RegisterPage() {
                     <div className="text-center mb-8">
                         <h2 className="text-2xl font-bold text-gray-900 mb-2">Create Account</h2>
                         <p className="text-gray-500 text-sm">
-                            Get started with WhatStage<br />
+                            Get started with Tanaw AI<br />
                             Create your account to begin
                         </p>
                     </div>
@@ -304,7 +304,7 @@ export default function RegisterPage() {
             </main>
 
             <footer className="py-6 text-center text-xs text-gray-500 z-10">
-                <p>Copyright © WhatStage? {new Date().getFullYear()} | Privacy Policy</p>
+                <p>Copyright © Tanaw AI {new Date().getFullYear()} | Privacy Policy</p>
             </footer>
         </div>
     );

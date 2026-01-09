@@ -75,7 +75,7 @@ export default function Sidebar() {
                     </div>
                     {!isCollapsed && (
                         <span className="text-white font-semibold text-lg whitespace-nowrap overflow-hidden">
-                            WhatStage
+                            Tanaw AI
                         </span>
                     )}
                 </Link>

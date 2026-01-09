@@ -524,7 +524,7 @@ export default function DigitalProductFormModal({
                                     type="text"
                                     value={creatorName}
                                     onChange={e => setCreatorName(e.target.value)}
-                                    placeholder="e.g., John Doe, WhatStage Team"
+                                    placeholder="e.g., John Doe, Tanaw AI Team"
                                     className="w-full px-5 py-3.5 bg-gray-50 border-transparent focus:border-emerald-500 focus:bg-white focus:ring-0 rounded-xl transition-all text-gray-900 placeholder:text-gray-400 font-medium"
                                 />
                             </div>

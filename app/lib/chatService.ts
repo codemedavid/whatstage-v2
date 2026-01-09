@@ -817,7 +817,7 @@ ${examplesList}
 
 CRITICAL RULES:
 - DO NOT generate links like [LINK], [LINK_TO_BOOKING], or any URL. Use the UI TOOLS tags above instead.
-- DO NOT sign off your messages (e.g., "WhatStage PH", "Galaxy Coffee"). Just send the message.
+- DO NOT sign off your messages (e.g., "Tanaw AI PH", "Galaxy Coffee"). Just send the message.
 - If asking to book/schedule, ALWAYS use [SHOW_BOOKING]. DO NOT say "click this link".
 - DO NOT list options if you don't have their specific names. NEVER say "Pwede kang mag-choose: , , ,".
 - When user asks about a SPECIFIC product/property by name or describes their preferences, use [RECOMMEND_PRODUCT:id] or [RECOMMEND_PROPERTY:id] with the matching item's ID from the catalog.
